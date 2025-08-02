@@ -1,0 +1,98 @@
+[
+  {
+    "name": "Отжимания с широкой постановкой",
+    "link": "https://youtu.be/example1",
+    "group": "грудь",
+    "level": ["Новичок", "1–2 года", "3+ лет"],
+    "equipment": [],
+    "limitations": []
+  },
+  {
+    "name": "Болгарские выпады",
+    "link": "https://youtu.be/example2",
+    "group": "ноги",
+    "level": ["1–2 года", "3+ лет"],
+    "equipment": ["Гантели"],
+    "limitations": ["Больные колени"]
+  },
+  {
+    "name": "Тяга штанги в наклоне",
+    "link": "https://youtu.be/example3",
+    "group": "спина",
+    "level": ["1–2 года", "3+ лет"],
+    "equipment": ["Штанга"],
+    "limitations": []
+  },
+  {
+    "name": "Приседания с резинкой",
+    "link": "https://youtu.be/example4",
+    "group": "ноги",
+    "level": ["Новичок", "1–2 года"],
+    "equipment": ["Резинки"],
+    "limitations": []
+  },
+  {
+    "name": "Подтягивания",
+    "link": "https://youtu.be/example5",
+    "group": "спина",
+    "level": ["1–2 года", "3+ лет"],
+    "equipment": ["Турник"],
+    "limitations": []
+  },
+  {
+    "name": "Разведение рук с резинкой",
+    "link": "https://youtu.be/example6",
+    "group": "плечи",
+    "level": ["Новичок", "1–2 года", "3+ лет"],
+    "equipment": ["Резинки"],
+    "limitations": []
+  },
+  {
+    "name": "Жим гантелей лёжа",
+    "link": "https://youtu.be/example7",
+    "group": "грудь",
+    "level": ["1–2 года", "3+ лет"],
+    "equipment": ["Гантели"],
+    "limitations": []
+  },
+  {
+    "name": "Ягодичный мостик",
+    "link": "https://youtu.be/example8",
+    "group": "ягодицы",
+    "level": ["Новичок", "1–2 года"],
+    "equipment": [],
+    "limitations": []
+  },
+  {
+    "name": "Планка на локтях",
+    "link": "https://youtu.be/example9",
+    "group": "кор",
+    "level": ["Новичок", "1–2 года", "3+ лет"],
+    "equipment": [],
+    "limitations": []
+  },
+  {
+    "name": "Подъём штанги на бицепс",
+    "link": "https://youtu.be/example10",
+    "group": "руки",
+    "level": ["1–2 года", "3+ лет"],
+    "equipment": ["Штанга"],
+    "limitations": []
+  },
+  {
+    "name": "Фронтальные приседания с гантелями",
+    "link": "https://youtu.be/example11",
+    "group": "ноги",
+    "level": ["1–2 года", "3+ лет"],
+    "equipment": ["Гантели"],
+    "limitations": []
+  },
+  {
+    "name": "Становая тяга с резинкой",
+    "link": "https://youtu.be/example12",
+    "group": "задняя цепь",
+    "level": ["Новичок", "1–2 года"],
+    "equipment": ["Резинки"],
+    "limitations": []
+  }
+]
