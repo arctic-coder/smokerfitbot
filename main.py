@@ -5,10 +5,11 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 from dotenv import load_dotenv
 import os
 import asyncio
+import json
 
 from fsm import Form
 from utils import generate_workout
-from db import init_db, save_user
+from db import init_db, save_user, get_user
 
 # Bot init
 load_dotenv()
@@ -17,6 +18,9 @@ storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 
 # Keyboards
+start_kb = ReplyKeyboardMarkup(resize_keyboard=True)
+start_kb.add("Заполнить анкету заново", "Использовать текущую анкету")
+
 level_kb = ReplyKeyboardMarkup(resize_keyboard=True)
 level_kb.add("Новичок", "1–2 года", "3+ лет")
 
@@ -33,14 +37,51 @@ duration_kb.add("15", "30", "45")
 
 # Handlers
 @dp.message_handler(commands='start')
-async def start_handler(message: types.Message):
-    await message.answer("Привет! Я — Конструктор тренировок от Физкультуры курильщика 🏋️‍♀️\nНапиши /go чтобы начать.")
+async def start_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    await message.answer(
+        "Привет! Я — Конструктор тренировок от Физкультуры курильщика 🏋️‍♀️\n\n"
+        "Вы можете использовать сохранённую анкету или заполнить новую:",
+        reply_markup=start_kb
+    )
 
-@dp.message_handler(commands='go')
-async def go_handler(message: types.Message, state: FSMContext):
+# @dp.message_handler(commands='go')
+# async def go_handler(message: types.Message, state: FSMContext):
+#     await state.finish()
+#     await Form.level.set()
+#     await message.answer("Выберите уровень подготовки:", reply_markup=level_kb)
+
+@dp.message_handler(lambda message: message.text == "Заполнить анкету заново")
+async def handle_new_form(message: types.Message, state: FSMContext):
     await state.finish()
     await Form.level.set()
     await message.answer("Выберите уровень подготовки:", reply_markup=level_kb)
+
+@dp.message_handler(lambda message: message.text == "Использовать текущую анкету")
+async def handle_existing_form(message: types.Message, state: FSMContext):
+    user = await get_user(message.from_user.id)
+    if not user:
+        return await message.answer("Анкета не найдена. Пожалуйста, заполните её заново.")
+
+    level = user[1]
+    limitations = json.loads(user[2])
+    equipment = json.loads(user[3])
+    duration_saved = user[4]
+
+    # Сохраняем в state
+    await state.update_data(level=level, limitations=limitations, equipment=equipment)
+    await Form.duration.set()
+
+    # Показываем анкету
+    text = (
+        "📋 Ваша анкета:\n"
+        f"• Уровень: {level}\n"
+        f"• Ограничения: {', '.join(limitations) if limitations else 'Нет'}\n"
+        f"• Инвентарь: {', '.join(equipment) if equipment else 'Нет'}\n\n"
+        "Выберите длительность тренировки:"
+    )
+    await message.answer(text, reply_markup=duration_kb)
+
 
 @dp.message_handler(state=Form.level)
 async def process_level(message: types.Message, state: FSMContext):

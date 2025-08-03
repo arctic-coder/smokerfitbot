@@ -25,3 +25,10 @@ async def save_user(user_id, level, limitations, equipment, duration_minutes):
             VALUES (?, ?, ?, ?, ?)
         ''', (user_id, level, limitations_json, equipment_json, duration_minutes))
         await db.commit()
+
+async def get_user(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute('SELECT * FROM users WHERE user_id = ?', (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row  # Вернёт кортеж: (user_id, level, limitations_json, equipment_json, duration_minutes)
+
