@@ -4,9 +4,11 @@ from aiogram.dispatcher import FSMContext
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from dotenv import load_dotenv
 import os
+import asyncio
 
 from fsm import Form
 from utils import generate_workout
+from db import init_db, save_user
 
 # Bot init
 load_dotenv()
@@ -97,8 +99,20 @@ async def process_duration(message: types.Message, state: FSMContext):
             text += f"{i}. {ex['name']}\nСсылка: {ex['link']}\n\n"
         await message.answer(text)
 
+    await save_user(
+        user_id=message.from_user.id,
+        level=user_data['level'],
+        limitations=user_data['limitations'],
+        equipment=user_data['equipment'],
+        duration_minutes=user_data['duration_minutes']
+    )
+
     await state.finish()
 
 if __name__ == '__main__':
-    print("Bot started")
-    executor.start_polling(dp, skip_updates=True)
+    async def main():
+        print("Bot started")
+        await init_db()
+        await dp.start_polling()
+
+    asyncio.run(main())
