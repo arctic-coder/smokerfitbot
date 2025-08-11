@@ -1,20 +1,34 @@
 from aiogram.types import ReplyKeyboardMarkup
+from constants import LEVELS, EQUIPMENT, LIMITATIONS, DURATION_MINUTES
 
-start_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-start_kb.add("Заполнить анкету заново", "Использовать текущую анкету")
+def _mk(rows, one_time: bool = False) -> ReplyKeyboardMarkup:
+    kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=one_time)
+    for r in rows:
+        # важно: приводим каждую кнопку к строке
+        kb.row(*[str(x) for x in r])
+    return kb
 
-level_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-level_kb.add("Новичок", "1–2 года", "3+ лет")
+# стартовые кнопки
+start_kb = _mk([["Заполнить анкету заново", "Использовать текущую анкету"]])
 
-limitations_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-limitations_kb.add("Грыжи", "Больные колени", "Ожирение")
-limitations_kb.add("Нет ограничений", "Готово")
+# уровень — из констант (одной строкой; при желании разбей на несколько строк)
+level_kb = _mk([LEVELS])
 
-equipment_kb = ReplyKeyboardMarkup(resize_keyboard=True)
-equipment_kb.add("Гантели", "Штанга", "Турник", "Резинки")
-equipment_kb.add("Нет", "Готово")
+# ограничения + "Готово"
+# если список LIMITATIONS изменится по длине — просто раскидай как удобно
+limitations_kb = _mk([
+    LIMITATIONS[:3],
+    LIMITATIONS[3:],
+    ["Готово"],
+])
 
-duration_kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-duration_kb.add("15", "30", "45")
+# инвентарь + "Готово" (раскидываем по нескольким строкам)
+equipment_kb = _mk([
+    EQUIPMENT[0:3],
+    EQUIPMENT[3:6],
+    EQUIPMENT[6:9],
+    EQUIPMENT[9:] + ["Готово"],
+])
 
-#todo constants
+# длительность (минуты) — кнопки-строки
+duration_kb = _mk([DURATION_MINUTES], one_time=True)
