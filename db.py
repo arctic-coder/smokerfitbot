@@ -9,10 +9,10 @@ load_dotenv()
 USE_SQLITE = os.getenv("USE_SQLITE", "true").lower() == "true"
 
 DB_PATH = "user_data.db"
-PG_DSN = os.getenv("DATABASE_URL")  # Railway выдаст DATABASE_URL
+PG_DSN = os.getenv("DATABASE_URL") 
 
 async def init_db():
-    if USE_SQLITE:
+    if USE_SQLITE: #local development
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS users (
