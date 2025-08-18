@@ -3,7 +3,7 @@ import json
 import aiosqlite
 import asyncpg
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 load_dotenv()
 
@@ -15,6 +15,21 @@ PG_DSN = os.getenv("DATABASE_URL")
 def _now_iso() -> str:
     return datetime.utcnow().isoformat()
 
+def _parse_iso(dt_val):
+    """
+    Принимает str | datetime | None -> возвращает aware datetime в UTC или None.
+    """
+    if not dt_val:
+        return None
+    if isinstance(dt_val, datetime):
+        return dt_val.astimezone(timezone.utc) if dt_val.tzinfo else dt_val.replace(tzinfo=timezone.utc)
+    try:
+        # поддержка 'Z' и без 'Z'
+        return datetime.fromisoformat(str(dt_val).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
 # ---------- USERS ----------
 async def _init_users_sqlite(conn):
     await conn.execute("""
@@ -23,7 +38,7 @@ async def _init_users_sqlite(conn):
             level TEXT,
             limitations TEXT,          -- JSON (list[str])
             equipment TEXT,            -- JSON (list[str])
-            duration_minutes INTEGER,
+            duration_minutes TEXT,
             free_workout_used INTEGER DEFAULT 0,  -- 0/1
             email TEXT,
             phone TEXT
@@ -38,7 +53,7 @@ async def _init_users_pg(conn):
             level TEXT,
             limitations TEXT,
             equipment TEXT,
-            duration_minutes INTEGER,
+            duration_minutes TEXT,
             free_workout_used BOOLEAN DEFAULT FALSE,
             email TEXT,
             phone TEXT
@@ -143,14 +158,53 @@ async def _init_subscriptions_pg(conn):
     """)
 
 async def upsert_subscription(user_id: int, **fields):
+    """
+    Апсерт подписки с защитой:
+    - если уже ACTIVE и период не истёк, запрещаем понижать статус;
+    - запрещаем укорачивать current_period_end.
+    """
     now = _now_iso()
+
+    def _sanitize(existing_row, incoming: dict):
+        if not existing_row:
+            return incoming
+
+        # извлечём старые значения из row (sqlite tuple или asyncpg Record)
+        if hasattr(existing_row, "keys"):
+            old_status = existing_row.get("status")
+            old_cpe = existing_row.get("current_period_end")
+        else:
+            # порядок колонок: user_id, status, payment_method_id, current_period_end, next_charge_at, amount, currency, created_at, updated_at
+            old_status = existing_row[1]
+            old_cpe = existing_row[3]
+
+        old_cpe_dt = _parse_iso(old_cpe)
+        now_dt = datetime.now(timezone.utc)
+
+        new = dict(incoming)
+
+        if old_status == "active" and old_cpe_dt and old_cpe_dt > now_dt:
+            # Разрешаем отмену продления (cancelled), но не даём даунгрейдить в trial/past_due
+            if new.get("status") and new["status"] not in ("active", "cancelled"):
+                new.pop("status", None)
+            # Не укорачиваем период
+            if "current_period_end" in new:
+                new_cpe_dt = _parse_iso(new["current_period_end"])
+                if new_cpe_dt and new_cpe_dt <= old_cpe_dt:
+                    new.pop("current_period_end", None)
+
+
+        return new
+
     if USE_SQLITE:
         async with aiosqlite.connect(DB_PATH) as db:
-            # прочитать текущую
-            async with db.execute("SELECT user_id FROM subscriptions WHERE user_id = ?", (user_id,)) as cur:
-                exists = await cur.fetchone()
-            if exists:
-                # динамический апдейт
+            # читаем текущую строку полностью
+            async with db.execute("SELECT * FROM subscriptions WHERE user_id = ?", (user_id,)) as cur:
+                existing = await cur.fetchone()
+
+            fields = _sanitize(existing, fields)
+
+            if existing:
                 cols = ", ".join([f"{k} = ?" for k in fields.keys()])
                 vals = list(fields.values()) + [now, user_id]
                 await db.execute(f"UPDATE subscriptions SET {cols}, updated_at = ? WHERE user_id = ?", vals)
@@ -162,10 +216,13 @@ async def upsert_subscription(user_id: int, **fields):
             await db.commit()
     else:
         conn = await asyncpg.connect(PG_DSN)
-        # соберём апсерт через ON CONFLICT
+        row = await conn.fetchrow("SELECT * FROM subscriptions WHERE user_id = $1", user_id)
+        fields = _sanitize(row, fields)
+
         cols = list(fields.keys())
         vals = list(fields.values())
         set_clause = ", ".join([f"{c} = EXCLUDED.{c}" for c in cols] + ["updated_at = EXCLUDED.updated_at"])
+
         await conn.execute(f"""
             INSERT INTO subscriptions (user_id, {", ".join(cols)}, created_at, updated_at)
             VALUES ($1, {", ".join(f"${i+2}" for i in range(len(vals)))}, NOW(), NOW())
@@ -204,7 +261,9 @@ async def _init_payments_sqlite(conn):
             raw TEXT
         )
     """)
+    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id ON payments(payment_id)")
     await conn.commit()
+
 
 async def _init_payments_pg(conn):
     await conn.execute("""
@@ -219,6 +278,8 @@ async def _init_payments_pg(conn):
             raw TEXT
         )
     """)
+    await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id ON payments(payment_id)")
+
 
 async def insert_payment(user_id: int, payment_id: str, amount: int, currency: str, status: str, raw_text: str):
     now = _now_iso()
@@ -268,6 +329,69 @@ async def _init_exercises_pg(conn):
             video_url TEXT
         )
     """)
+
+async def upsert_payment_status(user_id: int, payment_id: str, amount: int, currency: str, status: str, raw_text: str = "{}"):
+    """
+    Обновляет запись о платеже (по payment_id), а если её нет — вставляет новую.
+    """
+    now_iso = datetime.utcnow().isoformat()
+    if USE_SQLITE:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute("""
+                UPDATE payments
+                   SET status = ?, amount = ?, currency = ?, raw = ?, created_at = ?
+                 WHERE payment_id = ?
+            """, (status, amount, currency, raw_text, now_iso, payment_id))
+            await db.commit()
+            if cur.rowcount == 0:
+                await db.execute("""
+                    INSERT INTO payments (user_id, payment_id, amount, currency, status, created_at, raw)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (user_id, payment_id, amount, currency, status, now_iso, raw_text))
+                await db.commit()
+    else:
+        conn = await asyncpg.connect(PG_DSN)
+        row = await conn.fetchrow("""
+            UPDATE payments
+               SET status = $1, amount = $2, currency = $3, raw = $4
+             WHERE payment_id = $5
+         RETURNING id
+        """, status, amount, currency, raw_text, payment_id)
+        if not row:
+            await conn.execute("""
+                INSERT INTO payments (user_id, payment_id, amount, currency, status, created_at, raw)
+                VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+            """, user_id, payment_id, amount, currency, status, raw_text)
+        await conn.close()
+
+
+async def get_last_pending_payment_id(user_id: int) -> str | None:
+    """
+    Возвращает payment_id последнего незавершённого платежа пользователя.
+    """
+    pending_states = ("pending", "waiting_for_capture")
+    if USE_SQLITE:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(f"""
+                SELECT payment_id
+                  FROM payments
+                 WHERE user_id = ? AND status IN ({",".join("?"*len(pending_states))})
+              ORDER BY created_at DESC
+                 LIMIT 1
+            """, (user_id, *pending_states)) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else None
+    else:
+        conn = await asyncpg.connect(PG_DSN)
+        row = await conn.fetchrow("""
+            SELECT payment_id
+              FROM payments
+             WHERE user_id = $1 AND status = ANY($2::text[])
+          ORDER BY created_at DESC
+             LIMIT 1
+        """, user_id, list(pending_states))
+        await conn.close()
+        return row["payment_id"] if row else None
 
 # -------- init all --------
 async def init_db():

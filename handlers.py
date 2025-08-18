@@ -8,24 +8,24 @@ from yookassa.domain.exceptions.bad_request_error import BadRequestError
 
 from states import Form
 from utils import generate_workout
-from db import get_user, save_user, get_subscription, set_free_workout_used
+from db import get_user, save_user, get_subscription, set_free_workout_used, get_last_pending_payment_id
 from keyboards import start_kb, level_kb, limitations_kb, equipment_kb, duration_kb
-from constants import LEVELS, LIMITATIONS, EQUIPMENT, DURATION_MINUTES
+from constants import LEVELS, LIMITATIONS, EQUIPMENT, DURATION
 
 from billing.service import (
-    start_subscription, check_and_activate, cancel_subscription, is_active
+    start_or_resume_checkout, start_subscription, check_and_activate, cancel_subscription, is_active
 )
 
 # множества для быстрых проверок
-LEVELS_SET = set(LEVELS)                      # строки
-LIMITATIONS_SET = set(LIMITATIONS)            # строки (включая "Нет ограничений")
-EQUIPMENT_SET = set(EQUIPMENT)                # строки (включая "Ничего")
-DURATION_SET = {str(x) for x in DURATION_MINUTES}  # сравниваем со строками из Telegram
+LEVELS_SET = set(LEVELS)                     
+LIMITATIONS_SET = set(LIMITATIONS)          
+EQUIPMENT_SET = set(EQUIPMENT)               
+DURATION_SET = set(DURATION)  
 
 def register_handlers(dp: Dispatcher) -> None:
 
     # --- старт и выбор режима ---
-    @dp.message_handler(commands='start')
+    @dp.message_handler(commands='start', state="*")
     async def start_handler(message: types.Message, state: FSMContext):
         await state.finish()
         await message.answer(
@@ -38,7 +38,7 @@ def register_handlers(dp: Dispatcher) -> None:
     async def handle_new_form(message: types.Message, state: FSMContext):
         await state.finish()
         await Form.level.set()
-        await message.answer("Выберите уровень подготовки:", reply_markup=level_kb)
+        await message.answer("Какой у вас опыт регулярных занятий силовыми?", reply_markup=level_kb)
 
     @dp.message_handler(lambda m: m.text == "Использовать текущую анкету")
     async def handle_existing_form(message: types.Message, state: FSMContext):
@@ -132,8 +132,7 @@ def register_handlers(dp: Dispatcher) -> None:
         if message.text not in DURATION_SET:
             return await message.answer("Пожалуйста, выбери из кнопок.", reply_markup=duration_kb)
 
-        duration = int(message.text)
-        await state.update_data(duration_minutes=duration)
+        await state.update_data(duration_minutes=message.text)
 
         # --- доступ: free + подписка ---
         user_id = message.from_user.id
@@ -192,50 +191,136 @@ def register_handlers(dp: Dispatcher) -> None:
 
     @dp.message_handler(commands='cancel', state="*")
     async def cancel_cmd(message: types.Message):
-        await cancel_subscription(message.from_user.id)
-        await message.answer("Подписка отменена. Вы можете оформить её снова в любой момент: /subscribe")
+        sub = await get_subscription(message.from_user.id)
+        if not sub:
+            return await message.answer("Подписка не оформлена.")
+
+        # sub: (user_id, status, payment_method_id, current_period_end, ...)
+        status, cpe = sub[1], sub[3]
+        if not cpe:
+            return await message.answer("Подписка не активна.")
+
+        # уже отменена?
+        if status == "cancelled":
+            return await message.answer(f"Продление уже отключено. Доступ — до {cpe}.")
+
+        # спросим подтверждение
+        kb = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("Да, отменить продление", callback_data="cancel_yes"),
+            InlineKeyboardButton("Оставить как есть", callback_data="cancel_no"),
+        )
+        await message.answer(
+            f"Вы уверены, что хотите отменить продление? Доступ сохранится до {cpe}.",
+            reply_markup=kb
+        )
+
+    @dp.callback_query_handler(lambda c: c.data == "cancel_yes", state="*")
+    async def cancel_yes_cb(call: types.CallbackQuery):
+        await call.answer()
+        await cancel_subscription(call.from_user.id)
+        await call.message.edit_text("Продление отключено. Доступ сохранится до конца оплаченного периода. /status")
+
+    @dp.callback_query_handler(lambda c: c.data == "cancel_no", state="*")
+    async def cancel_no_cb(call: types.CallbackQuery):
+        await call.answer("Оставили как есть ✅", show_alert=False)
+
 
     @dp.message_handler(commands='subscribe', state="*")
     async def subscribe_cmd(message: types.Message, state: FSMContext):
+        user_id = message.from_user.id
+
+        sub = await get_subscription(user_id)
+        if is_active(sub):
+            cpe = sub[3] if sub else "-"
+            cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
+            return await message.answer(
+                f"У вас уже активная подписка{cancelled_note} ✅\nОплачено до: {cpe}\n\n"
+                "Продление будет доступно ближе к дате окончания. Команда: /status"
+            )
+
+        # создать новый или возобновить pending и вернуть ссылку
         try:
-            payment_id, url = await start_subscription(message.from_user.id, email=None, phone=None)
+            payment_id, url = await start_or_resume_checkout(user_id, email=None, phone=None)
         except BadRequestError as e:
-            # Покажем описание ошибки из ЮKassa
-            await message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
-            return
-        except Exception as e:
-            await message.answer("Не удалось создать платёж. Попробуйте позже.")
-            return
+            return await message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
+        except Exception:
+            return await message.answer("Не удалось создать/возобновить платёж. Попробуйте позже.")
 
         kb = InlineKeyboardMarkup().add(InlineKeyboardButton("Перейти к оплате", url=url))
         kb.add(InlineKeyboardButton("Проверить оплату", callback_data=f"chkpay:{payment_id}"))
         await message.answer("Оформление подписки: оплатите по ссылке ниже.", reply_markup=kb)
 
 
+    @dp.message_handler(commands='check', state="*")
+    async def check_cmd(message: types.Message):
+        payment_id = await get_last_pending_payment_id(message.from_user.id)
+        if not payment_id:
+            return await message.answer("Нет платежей, ожидающих подтверждения. Используйте /subscribe, чтобы оформить подписку.")
+
+        try:
+            result = await check_and_activate(message.from_user.id, payment_id)
+        except BadRequestError as e:
+            return await message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
+
+        if result == "succeeded":
+            await message.answer("Оплата прошла! Подписка активна ✅")
+        elif result == "pending":
+            # достанем ссылку
+            from yookassa_client import Payment  # локальный импорт, чтобы не засорять голову
+            p = Payment.find_one(payment_id)
+            url = getattr(getattr(p, "confirmation", None), "confirmation_url", None)
+            kb = InlineKeyboardMarkup()
+            if url:
+                kb.add(InlineKeyboardButton("Вернуться к оплате", url=url))
+            await message.answer("Платёж ещё не подтверждён. Если вы оплатили — подождите минуту и нажмите /check снова.", reply_markup=kb)
+        else:
+            await message.answer("Платёж не прошёл или был отменён. Попробуйте /subscribe ещё раз.")
+
     # --- колбэки 
     @dp.callback_query_handler(lambda c: c.data and c.data.startswith("chkpay:"), state="*")
     async def check_payment_cb(call: types.CallbackQuery):
-        await call.answer()  # закрыть "крутилку"
+        await call.answer()
         payment_id = call.data.split(":", 1)[1]
-        ok = await check_and_activate(call.from_user.id, payment_id)
-        if ok:
+        try:
+            result = await check_and_activate(call.from_user.id, payment_id)
+        except BadRequestError as e:
+            return await call.message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
+
+        if result == "succeeded":
             await call.message.edit_text("Оплата прошла! Подписка активна ✅")
+        elif result == "pending":
+            # достанем ссылку
+            from yookassa_client import Payment  # локальный импорт, чтобы не засорять голову
+            p = Payment.find_one(payment_id)
+            url = getattr(getattr(p, "confirmation", None), "confirmation_url", None)
+            kb = InlineKeyboardMarkup()
+            if url:
+                kb.add(InlineKeyboardButton("Вернуться к оплате", url=url))
+            await message.answer("Платёж ещё не подтверждён. Если вы оплатили — подождите минуту и нажмите /check снова.", reply_markup=kb)
         else:
-            await call.answer("Платёж пока не подтверждён", show_alert=True)
+            await call.message.answer("Платёж не прошёл или был отменён. Попробуйте /subscribe ещё раз.")
 
     @dp.callback_query_handler(lambda c: c.data == "go_subscribe", state="*")
     async def go_subscribe_cb(call: types.CallbackQuery):
         await call.answer()
+        user_id = call.from_user.id
+
+        sub = await get_subscription(user_id)
+        if is_active(sub):
+            cpe = sub[3] if sub else "-"
+            cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
+            return await call.message.answer(f"У вас уже активная подписка{cancelled_note} ✅\nОплачено до: {cpe}")
+
         try:
-            payment_id, url = await start_subscription(call.from_user.id, email=None, phone=None)
+            payment_id, url = await start_or_resume_checkout(user_id, email=None, phone=None)
         except BadRequestError as e:
-            await call.message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
-            return
+            return await call.message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
         except Exception:
-            await call.message.answer("Не удалось создать платёж. Попробуйте позже.")
-            return
+            return await call.message.answer("Не удалось создать/возобновить платёж. Попробуйте позже.")
 
         kb = InlineKeyboardMarkup().add(InlineKeyboardButton("Перейти к оплате", url=url))
         kb.add(InlineKeyboardButton("Проверить оплату", callback_data=f"chkpay:{payment_id}"))
         await call.message.answer("Оформление подписки: оплатите по ссылке ниже.", reply_markup=kb)
+
+
 

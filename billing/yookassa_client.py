@@ -6,9 +6,8 @@ SUBSCRIPTION_PRICE = int(os.getenv("SUBSCRIPTION_PRICE", "29900"))
 SUBSCRIPTION_CURRENCY = os.getenv("SUBSCRIPTION_CURRENCY", "RUB")
 RETURN_URL = os.getenv("RETURN_URL", "https://t.me/")
 
-# Фискальные настройки (подстрой под свой тестовый магазин)
-VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))              # 1/2/3/4/5/6 — см. настройки в ЛК ЮKassa
-TAX_SYSTEM_CODE = int(os.getenv("YOOKASSA_TAX_SYSTEM_CODE", "1")) # 1..6 — по системе налогообложения
+# Фискальные настройки 
+VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))         
 DEFAULT_CUSTOMER_EMAIL = os.getenv("YOOKASSA_DEFAULT_CUSTOMER_EMAIL", "test@example.com")
 
 def _ensure_config():
@@ -35,11 +34,10 @@ def _make_receipt(email: str | None, phone: str | None, amount_value: str):
         "customer": customer,
         "items": [{
             "description": "Подписка на тренировки (1 месяц)",
-            "quantity": "1.00",  # строка!
+            "quantity": "1.00",  
             "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
             "vat_code": VAT_CODE
-        }],
-        "tax_system_code": TAX_SYSTEM_CODE
+        }]
     }
     return receipt
 
@@ -65,17 +63,3 @@ def get_payment(payment_id: str):
     _ensure_config()
     return Payment.find_one(payment_id)
 
-def create_recurring_payment(payment_method_id: str, user_id: int, description: str = "Ежемесячная подписка"):
-    _ensure_config()
-    amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE / 100)
-    payload = {
-        "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
-        "payment_method_id": payment_method_id,
-        "capture": True,
-        "description": description,
-        "metadata": {"user_id": str(user_id)},
-        "receipt": _make_receipt(None, None, amount_value)  # можно подставить сохранённые email/phone из users
-    }
-    idempotence_key = str(uuid.uuid4())
-    payment = Payment.create(payload, idempotence_key)
-    return payment
