@@ -12,7 +12,7 @@ def _mk(rows, one_time: bool = False) -> ReplyKeyboardMarkup:
 start_kb = _mk([["Заполнить анкету заново", "Использовать текущую анкету"]])
 
 # уровень подготовки
-level_kb = _mk([LEVELS])
+level_kb = _mk([[x] for x in LEVELS])
 
 # ограничения + "Готово"
 limitations_kb = _mk([

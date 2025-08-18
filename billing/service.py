@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from db import upsert_subscription, upsert_payment_status, get_last_pending_payment_id  
+from db import upsert_subscription, upsert_payment_status, get_last_pending_payment_id, get_payment_confirmation_url
 from billing.yookassa_client import create_checkout_payment, get_payment
 
 def _next_month(dt: datetime) -> datetime:
@@ -10,13 +10,23 @@ def _next_month(dt: datetime) -> datetime:
 
 async def start_subscription(user_id: int, email: str | None, phone: str | None):
     payment_id, url = create_checkout_payment(user_id, email, phone)
-    await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}")
+    await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}", confirmation_url=url)
     return payment_id, url
+
+def _get_confirmation_url(p):
+    try:
+        return getattr(getattr(p, "confirmation", None), "confirmation_url", None)
+    except Exception:
+        return None
+    
 
 async def check_and_activate(user_id: int, payment_id: str):
     p = get_payment(payment_id)
     amount_int = int(round(float(p.amount.value) * 100))
-    await upsert_payment_status(user_id, payment_id, amount_int, p.amount.currency, p.status, raw_text=p.json())
+    await upsert_payment_status(
+        user_id, payment_id, amount_int, p.amount.currency, p.status,
+        raw_text=p.json(), confirmation_url=_get_confirmation_url(p)
+    )
 
     if p.status == "succeeded":
         pm_id = None
@@ -64,29 +74,21 @@ def is_active(sub_row) -> bool:
         cpe_dt = cpe
     return status in ("active", "cancelled") and cpe_dt > datetime.utcnow()
 
-
-def _get_confirmation_url(p):
-    try:
-        return getattr(getattr(p, "confirmation", None), "confirmation_url", None)
-    except Exception:
-        return None
-
 async def start_or_resume_checkout(user_id: int, email: str | None, phone: str | None):
     """
-    Если есть pending — вернём ссылку на оплату для существующего платежа.
+    Если есть pending — вернём ссылку на оплату для существующего платежа (из API или из БД).
     Если нет — создадим новый платеж.
     """
     last_pending = await get_last_pending_payment_id(user_id)
     if last_pending:
         p = get_payment(last_pending)
         if p and p.status in ("pending", "waiting_for_capture"):
-            url = _get_confirmation_url(p)
+            url = _get_confirmation_url(p) or await get_payment_confirmation_url(last_pending)
             if url:
                 return last_pending, url  # возобновляем оплату
-        # если ссылки нет (редко), создадим новый платёж ниже
 
     # создаём новый платёж
     payment_id, url = create_checkout_payment(user_id, email, phone)
-    await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}")
+    await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}", confirmation_url=url)
     return payment_id, url
 

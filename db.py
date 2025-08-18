@@ -258,7 +258,8 @@ async def _init_payments_sqlite(conn):
             currency TEXT,
             status TEXT,
             created_at TEXT,
-            raw TEXT
+            raw TEXT,
+            confirmation_url TEXT
         )
     """)
     await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id ON payments(payment_id)")
@@ -275,7 +276,8 @@ async def _init_payments_pg(conn):
             currency TEXT,
             status TEXT,
             created_at TIMESTAMP,
-            raw TEXT
+            raw TEXT,
+            confirmation_url TEXT
         )
     """)
     await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id ON payments(payment_id)")
@@ -330,39 +332,70 @@ async def _init_exercises_pg(conn):
         )
     """)
 
-async def upsert_payment_status(user_id: int, payment_id: str, amount: int, currency: str, status: str, raw_text: str = "{}"):
+async def upsert_payment_status(
+    user_id: int, payment_id: str, amount: int, currency: str,
+    status: str, raw_text: str = "{}", confirmation_url: str | None = None
+):
     """
     Обновляет запись о платеже (по payment_id), а если её нет — вставляет новую.
+    Также корректно сохраняет confirmation_url.
     """
     now_iso = datetime.utcnow().isoformat()
     if USE_SQLITE:
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute("""
                 UPDATE payments
-                   SET status = ?, amount = ?, currency = ?, raw = ?, created_at = ?
+                   SET status = ?, amount = ?, currency = ?, raw = ?, created_at = ?, confirmation_url = ?
                  WHERE payment_id = ?
-            """, (status, amount, currency, raw_text, now_iso, payment_id))
+            """, (status, amount, currency, raw_text, now_iso, confirmation_url, payment_id))
             await db.commit()
             if cur.rowcount == 0:
                 await db.execute("""
-                    INSERT INTO payments (user_id, payment_id, amount, currency, status, created_at, raw)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (user_id, payment_id, amount, currency, status, now_iso, raw_text))
+                    INSERT INTO payments (user_id, payment_id, amount, currency, status, created_at, raw, confirmation_url)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (user_id, payment_id, amount, currency, status, now_iso, raw_text, confirmation_url))
                 await db.commit()
     else:
         conn = await asyncpg.connect(PG_DSN)
         row = await conn.fetchrow("""
             UPDATE payments
-               SET status = $1, amount = $2, currency = $3, raw = $4
-             WHERE payment_id = $5
+               SET status = $1, amount = $2, currency = $3, raw = $4, confirmation_url = $5
+             WHERE payment_id = $6
          RETURNING id
-        """, status, amount, currency, raw_text, payment_id)
+        """, status, amount, currency, raw_text, confirmation_url, payment_id)
         if not row:
             await conn.execute("""
-                INSERT INTO payments (user_id, payment_id, amount, currency, status, created_at, raw)
-                VALUES ($1, $2, $3, $4, $5, NOW(), $6)
-            """, user_id, payment_id, amount, currency, status, raw_text)
+                INSERT INTO payments (user_id, payment_id, amount, currency, status, created_at, raw, confirmation_url)
+                VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)
+            """, user_id, payment_id, amount, currency, status, raw_text, confirmation_url)
         await conn.close()
+
+
+async def get_payment_confirmation_url(payment_id: str) -> str | None:
+    if USE_SQLITE:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT confirmation_url FROM payments WHERE payment_id = ?", (payment_id,)) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else None
+    else:
+        conn = await asyncpg.connect(PG_DSN)
+        row = await conn.fetchrow("SELECT confirmation_url FROM payments WHERE payment_id = $1", payment_id)
+        await conn.close()
+        return row["confirmation_url"] if row else None
+    
+
+async def get_user_id_by_payment_id(payment_id: str) -> int | None:
+    if USE_SQLITE:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT user_id FROM payments WHERE payment_id = ?", (payment_id,)) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else None
+    else:
+        conn = await asyncpg.connect(PG_DSN)
+        row = await conn.fetchrow("SELECT user_id FROM payments WHERE payment_id = $1", payment_id)
+        await conn.close()
+        return row["user_id"] if row else None
+
 
 
 async def get_last_pending_payment_id(user_id: int) -> str | None:
