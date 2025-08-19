@@ -3,7 +3,7 @@ import json
 import aiosqlite
 import asyncpg
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 load_dotenv()
 
@@ -13,7 +13,7 @@ PG_DSN = os.getenv("DATABASE_URL")
 
 # ---------- helpers ----------
 def _now_iso() -> str:
-    return datetime.utcnow().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 def _parse_iso(dt_val):
     """
@@ -39,9 +39,8 @@ async def _init_users_sqlite(conn):
             limitations TEXT,          -- JSON (list[str])
             equipment TEXT,            -- JSON (list[str])
             duration_minutes TEXT,
-            free_workout_used INTEGER DEFAULT 0,  -- 0/1
-            email TEXT,
-            phone TEXT
+            free_workout_used INTEGER DEFAULT 0  
+   
         )
     """)
     await conn.commit()
@@ -54,9 +53,7 @@ async def _init_users_pg(conn):
             limitations TEXT,
             equipment TEXT,
             duration_minutes TEXT,
-            free_workout_used BOOLEAN DEFAULT FALSE,
-            email TEXT,
-            phone TEXT
+            free_workout_used BOOLEAN DEFAULT FALSE
         )
     """)
 
@@ -100,7 +97,7 @@ async def get_user(user_id):
         await conn.close()
         if row:
             return (row["user_id"], row["level"], row["limitations"], row["equipment"],
-                    row["duration_minutes"], row["free_workout_used"], row["email"], row["phone"])
+                    row["duration_minutes"], row["free_workout_used"])
         return None
 
 async def set_free_workout_used(user_id: int, used: bool = True):
@@ -136,6 +133,7 @@ async def _init_subscriptions_sqlite(conn):
             next_charge_at TEXT,
             amount INTEGER,
             currency TEXT,
+            email TEXT,           
             created_at TEXT,
             updated_at TEXT
         )
@@ -152,10 +150,27 @@ async def _init_subscriptions_pg(conn):
             next_charge_at TIMESTAMP,
             amount INTEGER,
             currency TEXT,
+            email TEXT,           
             created_at TIMESTAMP,
             updated_at TIMESTAMP
         )
     """)
+
+async def get_subscription_email(user_id: int) -> str | None:
+    if USE_SQLITE:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT email FROM subscriptions WHERE user_id = ?", (user_id,)) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else None
+    else:
+        conn = await asyncpg.connect(PG_DSN)
+        row = await conn.fetchrow("SELECT email FROM subscriptions WHERE user_id = $1", user_id)
+        await conn.close()
+        return row["email"] if row else None
+
+async def set_subscription_email(user_id: int, email: str):
+    await upsert_subscription(user_id, email=email)
+
 
 async def upsert_subscription(user_id: int, **fields):
     """
@@ -247,7 +262,7 @@ async def get_subscription(user_id: int):
             )
         return None
 
-# ---------- PAYMENTS (audit) ----------
+
 async def _init_payments_sqlite(conn):
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS payments (
@@ -300,7 +315,6 @@ async def insert_payment(user_id: int, payment_id: str, amount: int, currency: s
         """, user_id, payment_id, amount, currency, status, raw_text)
         await conn.close()
 
-# ---------- EXERCISES (как было) ----------
 async def _init_exercises_sqlite(conn):
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS exercises (
@@ -425,6 +439,40 @@ async def get_last_pending_payment_id(user_id: int) -> str | None:
         """, user_id, list(pending_states))
         await conn.close()
         return row["payment_id"] if row else None
+    
+
+async def list_due_subscriptions(now_iso: str):
+    """
+    Возвращает список user_id, для которых нужно попытаться автосписание:
+      - status = 'active'
+      - payment_method_id IS NOT NULL
+      - next_charge_at <= now
+    """
+    if USE_SQLITE:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+                SELECT user_id
+                  FROM subscriptions
+                 WHERE status = 'active'
+                   AND payment_method_id IS NOT NULL
+                   AND next_charge_at IS NOT NULL
+                   AND next_charge_at <= ?
+            """, (now_iso,)) as cur:
+                rows = await cur.fetchall()
+                return [r[0] for r in rows]
+    else:
+        conn = await asyncpg.connect(PG_DSN)
+        rows = await conn.fetch("""
+            SELECT user_id
+              FROM subscriptions
+             WHERE status = 'active'
+               AND payment_method_id IS NOT NULL
+               AND next_charge_at IS NOT NULL
+               AND next_charge_at <= $1
+        """, now_iso)
+        await conn.close()
+        return [r["user_id"] for r in rows]
+
 
 # -------- init all --------
 async def init_db():

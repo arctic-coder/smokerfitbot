@@ -1,15 +1,62 @@
-from datetime import datetime, timedelta
-from db import upsert_subscription, upsert_payment_status, get_last_pending_payment_id, get_payment_confirmation_url
-from billing.yookassa_client import create_checkout_payment, get_payment
+from datetime import datetime, timedelta, timezone
+from db import (
+    upsert_subscription, upsert_payment_status, get_last_pending_payment_id,
+    get_payment_confirmation_url, get_subscription, insert_payment
+)
+from billing.yookassa_client import create_checkout_payment, get_payment, create_recurring_payment
 
 def _next_month(dt: datetime) -> datetime:
     month = dt.month + 1
     year = dt.year + (1 if month > 12 else 0)
     month = month if month <= 12 else 1
-    return dt.replace(year=year, month=month)
+    try:
+        return dt.replace(year=year, month=month)
+    except ValueError:
+        return dt.replace(year=year, month=month, day=28)
 
-async def start_subscription(user_id: int, email: str | None, phone: str | None):
-    payment_id, url = create_checkout_payment(user_id, email, phone)
+def _extract_email_from_subscription_row(sub) -> str | None:
+    """
+    Извлекаем email из кортежа подписки без жёсткой завязки на позицию поля.
+    Возвращает None, если email не найден.
+    """
+    if not sub:
+        return None
+    for x in sub:
+        if isinstance(x, str) and "@" in x and " " not in x:
+            return x
+    return None
+
+
+def _calc_renewal_dates(current_period_end, now_utc: datetime):
+    """
+    Возвращает (new_cpe, next_charge_at):
+    - если текущий период ещё активен, считаем от current_period_end;
+    - если истёк — считаем от now.
+    Гарантируем работу только с UTC-aware datetime.
+    """
+    # нормализуем current_period_end к UTC-aware datetime
+    if isinstance(current_period_end, str):
+        try:
+            cpe_dt = datetime.fromisoformat(current_period_end.replace("Z", "+00:00"))
+        except Exception:
+            cpe_dt = None
+    else:
+        cpe_dt = current_period_end
+
+    if cpe_dt is not None:
+        if cpe_dt.tzinfo is None:
+            cpe_dt = cpe_dt.replace(tzinfo=timezone.utc)
+        else:
+            cpe_dt = cpe_dt.astimezone(timezone.utc)
+
+    anchor = cpe_dt if (cpe_dt and cpe_dt > now_utc) else now_utc
+    new_cpe = _next_month(anchor)
+    next_charge_at = new_cpe - timedelta(days=1)
+    return new_cpe, next_charge_at
+
+
+async def start_subscription(user_id: int, email: str | None):
+    payment_id, url = create_checkout_payment(user_id, email)
     await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}", confirmation_url=url)
     return payment_id, url
 
@@ -21,6 +68,10 @@ def _get_confirmation_url(p):
     
 
 async def check_and_activate(user_id: int, payment_id: str):
+    """
+    Подтягивает платёж из ЮKassa, обновляет payments, и при success продлевает подписку.
+    Корректно сохраняет payment_method_id (это ИД СПОСОБА оплаты, НЕ payment_id).
+    """
     p = get_payment(payment_id)
     amount_int = int(round(float(p.amount.value) * 100))
     await upsert_payment_status(
@@ -29,16 +80,26 @@ async def check_and_activate(user_id: int, payment_id: str):
     )
 
     if p.status == "succeeded":
+        # Сохраняем ИД способа оплаты, только если он "saved"
         pm_id = None
-        if p.payment_method and getattr(p.payment_method, "saved", False):
-            pm_id = p.payment_method.id
-        now = datetime.utcnow()
+        try:
+            if p.payment_method and getattr(p.payment_method, "saved", False):
+                pm_id = p.payment_method.id  # ВАЖНО: это pm_... , НЕ id платежа
+        except Exception:
+            pm_id = None
+
+        # вытянем текущую подписку, чтобы корректно считать от cpe
+        sub = await get_subscription(user_id)
+        old_cpe = sub[3] if sub else None
+        now = datetime.now(timezone.utc)
+        new_cpe, next_charge_at = _calc_renewal_dates(old_cpe, now)
+
         await upsert_subscription(
             user_id,
             status="active",
-            payment_method_id=pm_id,
-            current_period_end=_next_month(now),
-            next_charge_at=_next_month(now),
+            payment_method_id=pm_id or (sub[2] if sub else None),
+            current_period_end=new_cpe.isoformat(),
+            next_charge_at=next_charge_at.isoformat(),
             amount=amount_int,
             currency=p.amount.currency
         )
@@ -64,15 +125,25 @@ def is_active(sub_row) -> bool:
     cpe = sub_row[3]
     if not cpe:
         return False
-    # для SQLite дата — строка ISO
+    # нормализуем к UTC-aware
     if isinstance(cpe, str):
         try:
-            cpe_dt = datetime.fromisoformat(cpe)
+            cpe_dt = datetime.fromisoformat(cpe.replace("Z", "+00:00"))
         except Exception:
             return False
     else:
         cpe_dt = cpe
-    return status in ("active", "cancelled") and cpe_dt > datetime.utcnow()
+
+    if cpe_dt is None:
+        return False
+    # если без tzinfo — считаем это UTC
+    if cpe_dt.tzinfo is None:
+        cpe_dt = cpe_dt.replace(tzinfo=timezone.utc)
+    else:
+        cpe_dt = cpe_dt.astimezone(timezone.utc)
+
+    return status in ("active", "cancelled") and cpe_dt > datetime.now(timezone.utc)
+
 
 async def start_or_resume_checkout(user_id: int, email: str | None, phone: str | None):
     """
@@ -85,10 +156,116 @@ async def start_or_resume_checkout(user_id: int, email: str | None, phone: str |
         if p and p.status in ("pending", "waiting_for_capture"):
             url = _get_confirmation_url(p) or await get_payment_confirmation_url(last_pending)
             if url:
-                return last_pending, url  # возобновляем оплату
+                return last_pending, url
 
-    # создаём новый платёж
-    payment_id, url = create_checkout_payment(user_id, email, phone)
+    payment_id, url = create_checkout_payment(user_id, email)
     await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}", confirmation_url=url)
     return payment_id, url
 
+# ---------- АВТОСПИСАНИЯ ----------
+
+async def charge_recurring(user_id: int):
+    """
+    Пытается списать подписку по payment_method_id, если пришло время.
+    Возвращает 'succeeded' | 'pending' | 'failed' | 'skipped'.
+    """
+    sub = await get_subscription(user_id)
+    if not sub:
+        return "skipped"
+
+    status, pmid, cpe, nca = sub[1], sub[2], sub[3], sub[4]
+    now = datetime.now(timezone.utc)
+
+    # Списываем только если подписка активна и есть сохранённый способ оплаты
+    if status != "active" or not pmid:
+        return "skipped"
+
+    # Нужен email для чека
+    sub_email = _extract_email_from_subscription_row(sub)
+    if not sub_email:
+        # нет e-mail — корректнее не пытаться списывать (иначе SDK упадёт на _make_receipt)
+        return "skipped"
+
+    # нормализуем next_charge_at к UTC-aware
+    if isinstance(nca, str):
+        try:
+            nca = datetime.fromisoformat(nca.replace("Z", "+00:00"))
+        except Exception:
+            nca = None
+    if nca and nca.tzinfo is None:
+        nca = nca.replace(tzinfo=timezone.utc)
+    elif nca:
+        nca = nca.astimezone(timezone.utc)
+
+    if not nca or nca > now:
+        return "skipped"
+
+    # Не плодим новые pending, если уже есть
+    pending = await get_last_pending_payment_id(user_id)
+    if pending:
+        p = get_payment(pending)
+        if p and p.status in ("pending", "waiting_for_capture"):
+            return "pending"
+
+    # Создаём рекуррентный платёж (передаём email!)
+    payment = create_recurring_payment(
+        payment_method_id=pmid,
+        user_id=user_id,
+        email=sub_email,
+        description="Продление подписки на 1 месяц"
+    )
+
+    amount_int = int(round(float(payment.amount.value) * 100))
+    await upsert_payment_status(
+        user_id, payment.id, amount_int, payment.amount.currency, payment.status, raw_text=payment.json()
+    )
+
+    if payment.status == "succeeded":
+        # продлеваем на месяц (от cpe, если он в будущем; иначе от now)
+        new_cpe, next_charge_at = _calc_renewal_dates(cpe, now)
+        await upsert_subscription(
+            user_id,
+            status="active",
+            current_period_end=new_cpe.isoformat(),
+            next_charge_at=next_charge_at.isoformat(),
+            amount=amount_int,
+            currency=payment.amount.currency
+        )
+        return "succeeded"
+
+    if payment.status in ("pending", "waiting_for_capture"):
+        # ждём вебхук/проверку
+        return "pending"
+
+    # failed: аккуратно назначим следующую попытку до конца периода,
+    # чтобы не молотить каждую минуту
+    cpe_dt = None
+    if cpe:
+        try:
+            cpe_dt = datetime.fromisoformat(cpe.replace("Z", "+00:00")) if isinstance(cpe, str) else cpe
+        except Exception:
+            cpe_dt = None
+        if cpe_dt and cpe_dt.tzinfo is None:
+            cpe_dt = cpe_dt.replace(tzinfo=timezone.utc)
+        elif cpe_dt:
+            cpe_dt = cpe_dt.astimezone(timezone.utc)
+
+    retry_at = min(cpe_dt, now + timedelta(hours=12)) if cpe_dt else (now + timedelta(hours=12))
+    await upsert_subscription(user_id, next_charge_at=retry_at.isoformat())
+    return "failed"
+
+
+
+async def charge_due_subscriptions():
+    """
+    Находит подписки, которым пора списать, и вызывает charge_recurring по каждой.
+    Фильтр: status='active', payment_method_id NOT NULL, next_charge_at <= now.
+    """
+    from db import list_due_subscriptions
+    now_iso = datetime.now(timezone.utc).isoformat()
+    due = await list_due_subscriptions(now_iso)
+    results = {"succeeded": 0, "pending": 0, "failed": 0, "skipped": 0}
+    for user_id in due:
+        res = await charge_recurring(user_id)
+        results[res] = results.get(res, 0) + 1
+    return results

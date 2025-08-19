@@ -5,3 +5,4 @@ class Form(StatesGroup):
     limitations = State()
     equipment = State()
     duration = State()
+    email = State()

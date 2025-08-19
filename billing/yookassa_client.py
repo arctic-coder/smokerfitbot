@@ -2,13 +2,15 @@ import os
 import uuid
 from yookassa import Configuration, Payment
 
-SUBSCRIPTION_PRICE = int(os.getenv("SUBSCRIPTION_PRICE", "29900"))
+SUBSCRIPTION_PRICE = int(os.getenv("SUBSCRIPTION_PRICE", "39900"))
 SUBSCRIPTION_CURRENCY = os.getenv("SUBSCRIPTION_CURRENCY", "RUB")
 RETURN_URL = os.getenv("RETURN_URL", "https://t.me/")
 
 # Фискальные настройки 
 VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))         
 DEFAULT_CUSTOMER_EMAIL = os.getenv("YOOKASSA_DEFAULT_CUSTOMER_EMAIL", "test@example.com")
+
+SUBSCRIPTION_TITLE = os.getenv("SUBSCRIPTION_TITLE", "Подписка «Физкультура курильщика» (1 месяц)")
 
 def _ensure_config():
     # вызывать перед каждым запросом, чтобы точно подхватить env
@@ -19,21 +21,15 @@ def _ensure_config():
     Configuration.account_id = shop_id
     Configuration.secret_key = secret
 
-def _make_receipt(email: str | None, phone: str | None, amount_value: str):
-    # customer обязателен, если включена фискализация
-    customer = {}
-    if email:
-        customer = {"email": email}
-    elif phone:
-        customer = {"phone": phone}
-    else:
-        # для теста можно подставить дефолтный email
-        customer = {"email": DEFAULT_CUSTOMER_EMAIL}
+def _make_receipt(email: str | None, amount_value: str):
+    if not email:
+        raise ValueError("Email обязателен для отправки чека")
+    customer = {"email": email}
 
     receipt = {
         "customer": customer,
         "items": [{
-            "description": "Подписка на тренировки (1 месяц)",
+            "description": SUBSCRIPTION_TITLE,
             "quantity": "1.00",  
             "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
             "vat_code": VAT_CODE
@@ -41,7 +37,8 @@ def _make_receipt(email: str | None, phone: str | None, amount_value: str):
     }
     return receipt
 
-def create_checkout_payment(user_id: int, email: str | None, phone: str | None, description: str = "Подписка на тренировки"):
+def create_checkout_payment(user_id: int, email: str | None, description: str = SUBSCRIPTION_TITLE):
+
     _ensure_config()
 
     amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE / 100)
@@ -51,13 +48,32 @@ def create_checkout_payment(user_id: int, email: str | None, phone: str | None, 
         "capture": True,
         "save_payment_method": True,
         "description": description,
-        "metadata": {"user_id": str(user_id)},
-        "receipt": _make_receipt(email, phone, amount_value)
+        "metadata": {"user_id": str(user_id), "origin": "initial"},
+        "receipt": _make_receipt(email, amount_value)
     }
 
     idempotence_key = str(uuid.uuid4())
     payment = Payment.create(payload, idempotence_key)
     return payment.id, payment.confirmation.confirmation_url
+
+def create_recurring_payment(payment_method_id: str, user_id: int, email: str | None, description: str = f"Продление: {SUBSCRIPTION_TITLE}"):
+
+    """
+    Создаёт рекуррентный платёж по сохранённому способу оплаты (без редиректа).
+    """
+    _ensure_config()
+    amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE / 100)
+    payload = {
+        "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
+        "payment_method_id": payment_method_id,
+        "capture": True,
+        "description": description,
+        "metadata": {"user_id": str(user_id), "origin": "recurring"},
+        "receipt": _make_receipt(email=email, amount_value=amount_value),
+    }
+    idempotence_key = str(uuid.uuid4())
+    payment = Payment.create(payload, idempotence_key)
+    return payment  # вернём объект платежа
 
 def get_payment(payment_id: str):
     _ensure_config()

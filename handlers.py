@@ -1,5 +1,8 @@
 import json
+import os
 from aiogram import types
+from zoneinfo import ZoneInfo
+from datetime import datetime, timezone
 from aiogram.dispatcher import FSMContext
 from aiogram import Dispatcher
 from aiogram.types import ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
@@ -8,7 +11,7 @@ from yookassa.domain.exceptions.bad_request_error import BadRequestError
 
 from states import Form
 from utils import generate_workout
-from db import get_user, save_user, get_subscription, set_free_workout_used, get_last_pending_payment_id
+from db import get_user, save_user, get_subscription, set_free_workout_used, get_last_pending_payment_id, upsert_subscription
 from keyboards import start_kb, level_kb, limitations_kb, equipment_kb, duration_kb
 from constants import LEVELS, LIMITATIONS, EQUIPMENT, DURATION
 
@@ -16,13 +19,35 @@ from billing.service import (
     start_or_resume_checkout, start_subscription, check_and_activate, cancel_subscription, is_active
 )
 
-# множества для быстрых проверок
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0")) 
+
 LEVELS_SET = set(LEVELS)                     
 LIMITATIONS_SET = set(LIMITATIONS)          
 EQUIPMENT_SET = set(EQUIPMENT)               
 DURATION_SET = set(DURATION)  
 
 def register_handlers(dp: Dispatcher) -> None:
+
+
+    # --- email helpers ---
+    import re
+    from typing import Optional
+
+    _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+
+    def _valid_email(s: str) -> bool:
+        return bool(_EMAIL_RE.match((s or "").strip()))
+
+    def _extract_email_from_subscription_row(sub) -> Optional[str]:
+        """
+        Пока не жёстко задан индекс email в subscriptions — берём первое поле, похожее на e-mail.
+        """
+        if not sub:
+            return None
+        for x in sub:
+            if isinstance(x, str) and "@" in x and " " not in x:
+                return x
+        return None
 
     # --- старт и выбор режима ---
     @dp.message_handler(commands='start', state="*")
@@ -181,7 +206,7 @@ def register_handlers(dp: Dispatcher) -> None:
 
     @dp.message_handler(commands='status', state="*")
     async def status_cmd(message: types.Message):
-        from db import get_payment_confirmation_url
+        from db import get_payment_confirmation_url, get_subscription
         user_id = message.from_user.id
         sub = await get_subscription(user_id)
 
@@ -193,8 +218,11 @@ def register_handlers(dp: Dispatcher) -> None:
         else:
             status = sub[1]
             cpe = sub[3] or "-"
+            nca = sub[4] or "-"
             text_lines.append(f"Статус подписки: {status}")
             text_lines.append(f"Доступ (оплачено) до: {cpe}")
+            if status == "active":
+                text_lines.append(f"Следующее списание: {nca} (≈ за 1 день до окончания)")
 
         pending_id = await get_last_pending_payment_id(user_id)
         if pending_id:
@@ -207,7 +235,6 @@ def register_handlers(dp: Dispatcher) -> None:
 
         text_lines.append("\nКоманды: /subscribe — оформить, /check — проверить, /cancel — отключить продление")
         await message.answer("\n".join(text_lines), reply_markup=kb if kb.inline_keyboard else None)
-
 
     @dp.message_handler(commands='cancel', state="*")
     async def cancel_cmd(message: types.Message):
@@ -259,9 +286,18 @@ def register_handlers(dp: Dispatcher) -> None:
                 "Продление будет доступно ближе к дате окончания. Команда: /status"
             )
 
-        # создать новый или возобновить pending и вернуть ссылку
+        # e-mail: берём из подписки или из state; если нет — просим ввести
+        data = await state.get_data()
+        sub_email = _extract_email_from_subscription_row(sub) or data.get("email")
+
+        if not _valid_email(sub_email or ""):
+            await state.update_data(next_flow="subscribe")
+            await Form.email.set()
+            return await message.answer("Введите e-mail для отправки чека:")
+
+        # создать новый или возобновить pending и вернуть ссылку (передаём email!)
         try:
-            payment_id, url = await start_or_resume_checkout(user_id, email=None, phone=None)
+            payment_id, url = await start_or_resume_checkout(user_id, email=sub_email, phone=None)
         except BadRequestError as e:
             return await message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
         except Exception:
@@ -271,6 +307,39 @@ def register_handlers(dp: Dispatcher) -> None:
         kb.add(InlineKeyboardButton("Проверить оплату", callback_data=f"chkpay:{payment_id}"))
         kb.add(InlineKeyboardButton("Отменить платёж", callback_data=f"cancelpay:{payment_id}"))
         await message.answer("Оформление подписки: оплатите по ссылке ниже.", reply_markup=kb)
+
+
+    @dp.message_handler(state=Form.email)
+    async def process_email_for_subscription(message: types.Message, state: FSMContext):
+        """
+        Пользователь прислал e-mail → валидируем, сохраняем в подписке и запускаем создание/возобновление платежа.
+        """
+        user_id = message.from_user.id
+        email = (message.text or "").strip()
+
+        if not _valid_email(email):
+            return await message.answer("Неверный e-mail. Введите корректный адрес:")
+
+        # сохраняем e-mail в подписке (персист) + в state
+        await upsert_subscription(user_id, email=email)
+        await state.update_data(email=email)
+
+        try:
+            payment_id, url = await start_or_resume_checkout(user_id, email=email, phone=None)
+        except BadRequestError as e:
+            await state.finish()
+            return await message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
+        except Exception:
+            await state.finish()
+            return await message.answer("Не удалось создать/возобновить платёж. Попробуйте позже.")
+
+        kb = InlineKeyboardMarkup().add(InlineKeyboardButton("Перейти к оплате", url=url))
+        kb.add(InlineKeyboardButton("Проверить оплату", callback_data=f"chkpay:{payment_id}"))
+        kb.add(InlineKeyboardButton("Отменить платёж", callback_data=f"cancelpay:{payment_id}"))
+
+        await message.answer("Отлично! Создал оплату, нажмите кнопку ниже:", reply_markup=kb)
+        await state.finish()
+
 
     @dp.message_handler(commands='check', state="*")
     async def check_cmd(message: types.Message):
@@ -322,7 +391,7 @@ def register_handlers(dp: Dispatcher) -> None:
 
 
     @dp.callback_query_handler(lambda c: c.data == "go_subscribe", state="*")
-    async def go_subscribe_cb(call: types.CallbackQuery):
+    async def go_subscribe_cb(call: types.CallbackQuery, state: FSMContext):
         await call.answer()
         user_id = call.from_user.id
 
@@ -332,8 +401,15 @@ def register_handlers(dp: Dispatcher) -> None:
             cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
             return await call.message.answer(f"У вас уже активная подписка{cancelled_note} ✅\nОплачено до: {cpe}")
 
+        data = await state.get_data()
+        sub_email = _extract_email_from_subscription_row(sub) or data.get("email")
+        if not _valid_email(sub_email or ""):
+            await state.update_data(next_flow="go_subscribe")
+            await Form.email.set()
+            return await call.message.answer("Введите e-mail для отправки чека:")
+
         try:
-            payment_id, url = await start_or_resume_checkout(user_id, email=None, phone=None)
+            payment_id, url = await start_or_resume_checkout(user_id, email=sub_email, phone=None)
         except BadRequestError as e:
             return await call.message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
         except Exception:
@@ -347,7 +423,7 @@ def register_handlers(dp: Dispatcher) -> None:
 
 
     @dp.callback_query_handler(lambda c: c.data.startswith("cancelpay:"), state="*")
-    async def cancel_payment_cb(call: types.CallbackQuery):
+    async def cancel_payment_cb(call: types.CallbackQuery, state: FSMContext):
         from db import upsert_payment_status
         await call.answer()
         payment_id = call.data.split(":", 1)[1]
@@ -356,9 +432,16 @@ def register_handlers(dp: Dispatcher) -> None:
         # пометим платёж отменённым у себя
         await upsert_payment_status(user_id, payment_id, 0, "RUB", "canceled", raw_text='{"reason":"user_cancelled"}')
 
-        # запустим обычный флоу — создадим новый или вернём ссылку на другой pending
+        # берём e-mail; если нет — просим пройти /subscribe, чтобы указать e-mail
+        sub = await get_subscription(user_id)
+        data = await state.get_data()
+        sub_email = _extract_email_from_subscription_row(sub) or data.get("email")
+
+        if not _valid_email(sub_email or ""):
+            return await call.message.answer("Платёж отменён. Чтобы создать новый, отправьте /subscribe и укажите e-mail для чека.")
+
         try:
-            new_id, url = await start_or_resume_checkout(user_id, email=None, phone=None)
+            new_id, url = await start_or_resume_checkout(user_id, email=sub_email, phone=None)
         except Exception:
             return await call.message.answer("Не удалось создать новый платеж. Попробуйте позже.")
 
@@ -368,4 +451,67 @@ def register_handlers(dp: Dispatcher) -> None:
 
 
 
+    #++++++ СЛУЖЕБНОЕ +++++++++++
 
+    def _parse_local_datetime(s: str) -> datetime:
+        """
+        Принимает строки вида:
+        - 'YYYY-MM-DD HH:MM'
+        - 'YYYY-MM-DDTHH:MM'
+        - 'YYYY-MM-DD HH:MM:SS'
+        - 'YYYY-MM-DDTHH:MM:SS'
+        Возвращает aware-datetime в Europe/Vienna.
+        """
+        s = s.strip().replace("T", " ")
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                dt_naive = datetime.strptime(s, fmt)
+                return dt_naive.replace(tzinfo=ZoneInfo("Europe/Vienna"))
+            except ValueError:
+                continue
+        raise ValueError("Неверный формат даты. Используй 'YYYY-MM-DD HH:MM'.")
+
+    @dp.message_handler(commands='admin_next_charge', state="*")
+    async def admin_next_charge_cmd(message: types.Message):
+        """
+        /admin_next_charge <user_id> <YYYY-MM-DD HH:MM>
+        Пример: /admin_next_charge 197925837 2025-08-18 10:00
+        Время интерпретируем как Europe/Vienna, сохраняем в БД в UTC (ISO-строка).
+        """
+        if message.from_user.id != ADMIN_ID:
+            return await message.answer("Недостаточно прав.")
+
+        try:
+            # Разбираем аргументы
+            parts = message.text.strip().split(maxsplit=2)
+            if len(parts) < 3:
+                raise ValueError("Нужно 2 аргумента: <user_id> <YYYY-MM-DD HH:MM>")
+
+            uid_str, dt_str = parts[1], parts[2]
+            uid = int(uid_str)
+
+            # Парсим локальное время и конвертируем в UTC
+            local_dt = _parse_local_datetime(dt_str)
+            utc_dt = local_dt.astimezone(timezone.utc)
+
+            # Пишем в БД ИМЕННО ISO-строкой 
+            await upsert_subscription(uid, next_charge_at=utc_dt.isoformat())
+
+            # Читаем обратно, чтобы показать, что реально лежит
+            sub = await get_subscription(uid)
+            stored_nca = sub[4] if sub else None  # (user_id, status, payment_method_id, current_period_end, next_charge_at, ...)
+            try:
+                stored_utc = datetime.fromisoformat(stored_nca).replace(tzinfo=timezone.utc)
+                stored_local = stored_utc.astimezone(ZoneInfo("Europe/Vienna")).strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                stored_local = str(stored_nca)
+
+            return await message.answer(
+                f"OK: next_charge_at для {uid} → {utc_dt.isoformat()} (UTC)\n"
+                f"= {stored_local} (Europe/Vienna) — сохранено."
+            )
+        except Exception as e:
+            return await message.answer(
+                f"Ошибка: {e}\n"
+                "Пример: /admin_next_charge 197925837 2025-08-18 10:00"
+            )

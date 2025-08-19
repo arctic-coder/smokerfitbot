@@ -1,12 +1,14 @@
 import os
+import asyncio
 from aiohttp import web
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-from db import init_db
+from db import init_db, get_user_id_by_payment_id
 from handlers import register_handlers
-import asyncio
+from billing.service import check_and_activate, charge_due_subscriptions
+
 
 def create_bot() -> Bot:
     load_dotenv()
@@ -24,8 +26,19 @@ async def yookassa_webhook(request: web.Request):
     if payment_id:
         uid = await get_user_id_by_payment_id(payment_id)
         if uid:
-            await check_and_activate(uid, payment_id)  # подтягиваем платёж через API внутри
+            # подтянем платёж через API и продлим при успехе
+            await check_and_activate(uid, payment_id)
     return web.Response(text="ok")
+
+async def _autobiller_loop():
+    # каждые 10 минут пробуем списать у тех, кому пора
+    while True:
+        try:
+            res = await charge_due_subscriptions()
+            # можно логировать res
+        except Exception as e:
+            print("autobiller error:", e)
+        await asyncio.sleep(60)  # 10 минут
 
 bot = create_bot()
 dp = Dispatcher(bot, storage=MemoryStorage())
@@ -36,11 +49,14 @@ if __name__ == '__main__':
         print("Bot started")
         await init_db()
 
-        # поднимем простой веб-сервер для вебхука
+        # веб-сервер для вебхука
         app = web.Application()
         app.router.add_post("/yookassa/webhook", yookassa_webhook)
         runner = web.AppRunner(app); await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080"))); await site.start()
+
+        # фоновые автосписания
+        asyncio.create_task(_autobiller_loop())
 
         await dp.start_polling()
 
