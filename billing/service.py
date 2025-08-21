@@ -54,12 +54,6 @@ def _calc_renewal_dates(current_period_end, now_utc: datetime):
     next_charge_at = new_cpe - timedelta(days=1)
     return new_cpe, next_charge_at
 
-
-async def start_subscription(user_id: int, email: str | None):
-    payment_id, url = create_checkout_payment(user_id, email)
-    await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}", confirmation_url=url)
-    return payment_id, url
-
 def _get_confirmation_url(p):
     try:
         return getattr(getattr(p, "confirmation", None), "confirmation_url", None)
@@ -145,7 +139,7 @@ def is_active(sub_row) -> bool:
     return status in ("active", "cancelled") and cpe_dt > datetime.now(timezone.utc)
 
 
-async def start_or_resume_checkout(user_id: int, email: str | None, phone: str | None):
+async def start_or_resume_checkout(user_id: int, email: str | None):
     """
     Если есть pending — вернём ссылку на оплату для существующего платежа (из API или из БД).
     Если нет — создадим новый платеж.

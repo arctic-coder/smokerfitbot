@@ -16,7 +16,7 @@ from keyboards import start_kb, level_kb, limitations_kb, equipment_kb, duration
 from constants import LEVELS, LIMITATIONS, EQUIPMENT, DURATION
 
 from billing.service import (
-    start_or_resume_checkout, start_subscription, check_and_activate, cancel_subscription, is_active
+    start_or_resume_checkout, check_and_activate, cancel_subscription, is_active
 )
 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0")) 
@@ -297,7 +297,7 @@ def register_handlers(dp: Dispatcher) -> None:
 
         # создать новый или возобновить pending и вернуть ссылку (передаём email!)
         try:
-            payment_id, url = await start_or_resume_checkout(user_id, email=sub_email, phone=None)
+            payment_id, url = await start_or_resume_checkout(user_id, email=sub_email)
         except BadRequestError as e:
             return await message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
         except Exception:
@@ -325,7 +325,7 @@ def register_handlers(dp: Dispatcher) -> None:
         await state.update_data(email=email)
 
         try:
-            payment_id, url = await start_or_resume_checkout(user_id, email=email, phone=None)
+            payment_id, url = await start_or_resume_checkout(user_id, email=email)
         except BadRequestError as e:
             await state.finish()
             return await message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
@@ -409,7 +409,7 @@ def register_handlers(dp: Dispatcher) -> None:
             return await call.message.answer("Введите e-mail для отправки чека:")
 
         try:
-            payment_id, url = await start_or_resume_checkout(user_id, email=sub_email, phone=None)
+            payment_id, url = await start_or_resume_checkout(user_id, email=sub_email)
         except BadRequestError as e:
             return await call.message.answer(f"ЮKassa отклонила запрос: {getattr(e, 'description', 'invalid_request')}")
         except Exception:
@@ -441,7 +441,7 @@ def register_handlers(dp: Dispatcher) -> None:
             return await call.message.answer("Платёж отменён. Чтобы создать новый, отправьте /subscribe и укажите e-mail для чека.")
 
         try:
-            new_id, url = await start_or_resume_checkout(user_id, email=sub_email, phone=None)
+            new_id, url = await start_or_resume_checkout(user_id, email=sub_email)
         except Exception:
             return await call.message.answer("Не удалось создать новый платеж. Попробуйте позже.")
 

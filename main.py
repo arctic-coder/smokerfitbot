@@ -17,6 +17,7 @@ def create_bot() -> Bot:
         raise RuntimeError("BOT_TOKEN is not set")
     return Bot(token=token)
 
+# для приёма веб‑хуков от Юкассы о статусе платежей без отпроса
 async def yookassa_webhook(request: web.Request):
     try:
         data = await request.json()
@@ -26,10 +27,10 @@ async def yookassa_webhook(request: web.Request):
     if payment_id:
         uid = await get_user_id_by_payment_id(payment_id)
         if uid:
-            # подтянем платёж через API и продлим при успехе
             await check_and_activate(uid, payment_id)
     return web.Response(text="ok")
 
+# фоновая задача вызывает charge_due_subscriptions() и пытается списать средства у пользователей с истёкшим доступом.
 async def _autobiller_loop():
     # каждые 10 минут пробуем списать у тех, кому пора
     while True:
@@ -38,7 +39,7 @@ async def _autobiller_loop():
             # можно логировать res
         except Exception as e:
             print("autobiller error:", e)
-        await asyncio.sleep(60)  # 10 минут
+        await asyncio.sleep(60)  # 10 минут TODO поправить, сейчас 1 минута для тестирования
 
 bot = create_bot()
 dp = Dispatcher(bot, storage=MemoryStorage())
