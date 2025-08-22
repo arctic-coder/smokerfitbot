@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from db import (
     upsert_subscription, upsert_payment_status, get_last_pending_payment_id,
-    get_payment_confirmation_url, get_subscription, insert_payment
+    get_payment_confirmation_url, get_subscription, insert_payment, mark_payment_applied, cancel_other_pendings 
 )
 from billing.yookassa_client import create_checkout_payment, get_payment, create_recurring_payment
 
@@ -61,33 +61,45 @@ def _get_confirmation_url(p):
         return None
     
 
+# service.py
 async def check_and_activate(user_id: int, payment_id: str):
     """
-    Подтягивает платёж из ЮKassa, обновляет payments, и при success продлевает подписку.
-    Корректно сохраняет payment_method_id (это ИД СПОСОБА оплаты, НЕ payment_id).
+    Тянет платёж из ЮKassa, синхронизирует payments.
+    Если платёж успешен — пытается атомарно пометить его applied_at.
+    Продлевает подписку ТОЛЬКО если пометка прошла впервые (идемпотентность).
     """
     p = await get_payment(payment_id)
+
+    # 1) Синхронизируем запись платежа у себя
     amount_int = int(round(float(p.amount.value) * 100))
     await upsert_payment_status(
         user_id, payment_id, amount_int, p.amount.currency, p.status,
         raw_text=p.json(), confirmation_url=_get_confirmation_url(p)
     )
 
+    # 2) Ветвление по статусу
     if p.status == "succeeded":
-        # Сохраняем ИД способа оплаты, только если он "saved"
+        # 2.1) idempotency: применяем платёж только один раз
+        first_time = await mark_payment_applied(payment_id)
+        if not first_time:
+            # уже применяли раньше — ничего не продлеваем, но сообщаем успех
+            return "succeeded"
+
+        # 2.2) сохраним ИД способа оплаты (если он сохранён)
         pm_id = None
         try:
             if p.payment_method and getattr(p.payment_method, "saved", False):
-                pm_id = p.payment_method.id  # ВАЖНО: это pm_... , НЕ id платежа
+                pm_id = p.payment_method.id
         except Exception:
             pm_id = None
 
-        # вытянем текущую подписку, чтобы корректно считать от cpe
+        # 2.3) посчитаем корректные даты продления
         sub = await get_subscription(user_id)
         old_cpe = sub[3] if sub else None
         now = datetime.now(timezone.utc)
         new_cpe, next_charge_at = _calc_renewal_dates(old_cpe, now)
 
+        # 2.4) продлеваем
         await upsert_subscription(
             user_id,
             status="active",
@@ -97,13 +109,15 @@ async def check_and_activate(user_id: int, payment_id: str):
             amount=amount_int,
             currency=p.amount.currency
         )
+        await cancel_other_pendings(user_id, keep_payment_id=payment_id) 
         return "succeeded"
 
     if p.status in ("pending", "waiting_for_capture"):
         return "pending"
 
-    # canceled / failed
+    # canceled / failed / прочее
     return "failed"
+
 
 
 async def cancel_subscription(user_id: int):
@@ -215,6 +229,12 @@ async def charge_recurring(user_id: int):
     )
 
     if payment.status == "succeeded":
+        # ИДЕМПОТЕНТНОСТЬ: применяем платёж только один раз на все гонки (вебхук/проверка)
+        first_time = await mark_payment_applied(payment.id)
+        if not first_time:
+            # этот платёж уже применяли — просто сообщаем успех, не продлеваем ещё раз
+            return "succeeded"
+
         # продлеваем на месяц (от cpe, если он в будущем; иначе от now)
         new_cpe, next_charge_at = _calc_renewal_dates(cpe, now)
         await upsert_subscription(
@@ -225,7 +245,11 @@ async def charge_recurring(user_id: int):
             amount=amount_int,
             currency=payment.amount.currency
         )
+
+        # удаляем прочие "висящие" pending этого пользователя
+        _ = await cancel_other_pendings(user_id, keep_payment_id=payment.id) 
         return "succeeded"
+
 
     if payment.status in ("pending", "waiting_for_capture"):
         # ждём вебхук/проверку

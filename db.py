@@ -257,8 +257,9 @@ async def get_subscription(user_id: int):
         if row:
             return (
                 row["user_id"], row["status"], row["payment_method_id"],
-                row["current_period_end"], row["next_charge_at"],
-                row["amount"], row["currency"], row["created_at"], row["updated_at"]
+            row["current_period_end"], row["next_charge_at"],
+            row["amount"], row["currency"], row["email"], 
+            row["created_at"], row["updated_at"]
             )
         return None
 
@@ -274,7 +275,8 @@ async def _init_payments_sqlite(conn):
             status TEXT,
             created_at TEXT,
             raw TEXT,
-            confirmation_url TEXT
+            confirmation_url TEXT,
+            applied_at TEXT NULL
         )
     """)
     await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id ON payments(payment_id)")
@@ -292,7 +294,8 @@ async def _init_payments_pg(conn):
             status TEXT,
             created_at TIMESTAMP,
             raw TEXT,
-            confirmation_url TEXT
+            confirmation_url TEXT,
+            applied_at TIMESTAMPTZ NULL
         )
     """)
     await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id ON payments(payment_id)")
@@ -314,6 +317,35 @@ async def insert_payment(user_id: int, payment_id: str, amount: int, currency: s
             VALUES ($1, $2, $3, $4, $5, NOW(), $6)
         """, user_id, payment_id, amount, currency, status, raw_text)
         await conn.close()
+
+
+async def mark_payment_applied(payment_id: str) -> bool:
+    """
+    Ставит applied_at=NOW(), но только если было NULL.
+    Возвращает True, если мы ПЕРВЫМИ отметили платёж как применённый.
+    """
+    if USE_SQLITE:
+        now = _now_iso()
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                "UPDATE payments SET applied_at = ? WHERE payment_id = ? AND applied_at IS NULL",
+                (now, payment_id)
+            )
+            await db.commit()
+            return cur.rowcount > 0  # True -> можно продлевать
+    else:
+        async with asyncpg.connect(PG_DSN) as conn:
+            res = await conn.execute(
+                """
+                UPDATE payments
+                SET applied_at = NOW()
+                WHERE payment_id = $1
+                AND applied_at IS NULL
+                """,
+                payment_id
+            )
+            #  'UPDATE 1' / 'UPDATE 0'
+            return res.split()[-1] == "1"
 
 async def _init_exercises_sqlite(conn):
     await conn.execute("""
@@ -472,6 +504,42 @@ async def list_due_subscriptions(now_iso: str):
         """, now_iso)
         await conn.close()
         return [r["user_id"] for r in rows]
+    
+async def cancel_other_pendings(user_id: int, keep_payment_id: str) -> int:
+    """
+    Локально помечает ВСЕ другие платежи пользователя со статусом pending/waiting_for_capture
+    как 'canceled', кроме указанного keep_payment_id. Возвращает число обновлённых строк.
+    """
+    if USE_SQLITE:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cur = await db.execute(
+                """
+                UPDATE payments
+                   SET status = 'canceled'
+                 WHERE user_id = ?
+                   AND payment_id <> ?
+                   AND status IN ('pending','waiting_for_capture')
+                """,
+                (user_id, keep_payment_id)
+            )
+            await db.commit()
+            return cur.rowcount or 0
+    else:
+        conn = await asyncpg.connect(PG_DSN)  # <-- было DSN
+        try:
+            res = await conn.execute(
+                """
+                UPDATE payments
+                   SET status = 'canceled'
+                 WHERE user_id = $1
+                   AND payment_id <> $2
+                   AND status = ANY($3::text[])
+                """,
+                user_id, keep_payment_id, ['pending','waiting_for_capture']
+            )
+            return int(res.split()[-1])  # 'UPDATE <n>'
+        finally:
+            await conn.close()
 
 
 # -------- init all --------
