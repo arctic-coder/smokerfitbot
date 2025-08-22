@@ -66,7 +66,7 @@ async def check_and_activate(user_id: int, payment_id: str):
     Подтягивает платёж из ЮKassa, обновляет payments, и при success продлевает подписку.
     Корректно сохраняет payment_method_id (это ИД СПОСОБА оплаты, НЕ payment_id).
     """
-    p = get_payment(payment_id)
+    p = await get_payment(payment_id)
     amount_int = int(round(float(p.amount.value) * 100))
     await upsert_payment_status(
         user_id, payment_id, amount_int, p.amount.currency, p.status,
@@ -146,13 +146,13 @@ async def start_or_resume_checkout(user_id: int, email: str | None):
     """
     last_pending = await get_last_pending_payment_id(user_id)
     if last_pending:
-        p = get_payment(last_pending)
+        p = await get_payment(last_pending)
         if p and p.status in ("pending", "waiting_for_capture"):
             url = _get_confirmation_url(p) or await get_payment_confirmation_url(last_pending)
             if url:
                 return last_pending, url
 
-    payment_id, url = create_checkout_payment(user_id, email)
+    payment_id, url = await create_checkout_payment(user_id, email)
     await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}", confirmation_url=url)
     return payment_id, url
 
@@ -197,12 +197,12 @@ async def charge_recurring(user_id: int):
     # Не плодим новые pending, если уже есть
     pending = await get_last_pending_payment_id(user_id)
     if pending:
-        p = get_payment(pending)
+        p = await get_payment(pending)
         if p and p.status in ("pending", "waiting_for_capture"):
             return "pending"
 
     # Создаём рекуррентный платёж (передаём email!)
-    payment = create_recurring_payment(
+    payment = await create_recurring_payment(
         payment_method_id=pmid,
         user_id=user_id,
         email=sub_email,

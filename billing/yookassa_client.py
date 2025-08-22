@@ -1,6 +1,7 @@
-import os
-import uuid
-from yookassa import Configuration, Payment
+import asyncio
+import os, uuid
+from yookassa import Configuration, Payment, Webhook
+from requests.exceptions import Timeout, ConnectionError, RequestException
 
 SUBSCRIPTION_PRICE = int(os.getenv("SUBSCRIPTION_PRICE", "39900"))
 SUBSCRIPTION_CURRENCY = os.getenv("SUBSCRIPTION_CURRENCY", "RUB")
@@ -11,6 +12,40 @@ VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))
 DEFAULT_CUSTOMER_EMAIL = os.getenv("YOOKASSA_DEFAULT_CUSTOMER_EMAIL", "test@example.com")
 
 SUBSCRIPTION_TITLE = os.getenv("SUBSCRIPTION_TITLE", "Подписка «Физкультура курильщика» (1 месяц)")
+
+class YookassaNetworkError(Exception):
+    pass
+
+async def _payment_create_async(payload: dict, idem: str):
+    try:
+        return await asyncio.to_thread(Payment.create, payload, idem)
+    except Timeout:
+        raise YookassaNetworkError("ЮKassa: время ожидания истекло")
+    except ConnectionError:
+        raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa")
+    except RequestException:
+        raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
+
+async def _payment_find_async(payment_id: str):
+    try:
+        return await asyncio.to_thread(Payment.find_one, payment_id)
+    except Timeout:
+        raise YookassaNetworkError("ЮKassa: время ожидания истекло")
+    except ConnectionError:
+        raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa")
+    except RequestException:
+        raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
+
+async def _payment_cancel_async(payment_id: str):
+    try:
+        return await asyncio.to_thread(Payment.cancel, payment_id)
+    except Timeout:
+        raise YookassaNetworkError("ЮKassa: время ожидания истекло")
+    except ConnectionError:
+        raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa")
+    except RequestException:
+        raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
+
 
 def _ensure_config():
     # вызывать перед каждым запросом, чтобы точно подхватить env
@@ -37,7 +72,7 @@ def _make_receipt(email: str | None, amount_value: str):
     }
     return receipt
 
-def create_checkout_payment(user_id: int, email: str | None, description: str = SUBSCRIPTION_TITLE):
+async def create_checkout_payment(user_id: int, email: str | None, description: str = SUBSCRIPTION_TITLE):
 
     _ensure_config()
 
@@ -51,12 +86,10 @@ def create_checkout_payment(user_id: int, email: str | None, description: str = 
         "metadata": {"user_id": str(user_id), "origin": "initial"},
         "receipt": _make_receipt(email, amount_value)
     }
-
-    idempotence_key = str(uuid.uuid4())
-    payment = Payment.create(payload, idempotence_key)
+    payment = await _payment_create_async(payload, str(uuid.uuid4()))
     return payment.id, payment.confirmation.confirmation_url
 
-def create_recurring_payment(payment_method_id: str, user_id: int, email: str | None, description: str = f"Продление: {SUBSCRIPTION_TITLE}"):
+async def create_recurring_payment(payment_method_id: str, user_id: int, email: str | None, description: str = f"Продление: {SUBSCRIPTION_TITLE}"):
 
     """
     Создаёт рекуррентный платёж по сохранённому способу оплаты (без редиректа).
@@ -71,11 +104,8 @@ def create_recurring_payment(payment_method_id: str, user_id: int, email: str | 
         "metadata": {"user_id": str(user_id), "origin": "recurring"},
         "receipt": _make_receipt(email=email, amount_value=amount_value),
     }
-    idempotence_key = str(uuid.uuid4())
-    payment = Payment.create(payload, idempotence_key)
-    return payment  # вернём объект платежа
+    return await _payment_create_async(payload, str(uuid.uuid4()))
 
-def get_payment(payment_id: str):
+async def get_payment(payment_id: str):
     _ensure_config()
-    return Payment.find_one(payment_id)
-
+    return await _payment_find_async(payment_id)
