@@ -53,6 +53,45 @@ def register_handlers(dp: Dispatcher) -> None:
     @dp.message_handler(commands='start', state="*")
     async def start_handler(message: types.Message, state: FSMContext):
         await state.finish()
+            # 1) Разбираем deep-link аргумент к /start
+        payload = message.get_args()  # вернёт строку после '?start='
+
+        if payload == "payment_success":
+            user_id = message.from_user.id
+
+            # 2) Берём последний незавершённый платёж этого пользователя
+            #    (по вашей логике их не может быть больше одного)
+            from db import get_last_pending_payment_id, get_payment_confirmation_url
+            payment_id = await get_last_pending_payment_id(user_id)
+
+            if not payment_id:
+                # Теоретически: пользователь уже всё завершил/отменил
+                return await message.answer(
+                    "Спасибо! Если вы завершили оплату — подписка будет активна. "
+                    "Сейчас у вас нет неподтверждённых платежей. Команда: /status"
+                )
+
+            # 3) Пробуем подтянуть платёж из ЮKassa и при успехе активировать подписку
+            from billing.service import check_and_activate
+            try:
+                result = await check_and_activate(user_id, payment_id)
+            except Exception:
+                # Здесь можно сделать более точную обработку, если внедрите YookassaNetworkError
+                return await message.answer("Не получилось проверить платёж, попробуйте /check чуть позже.")
+
+            if result == "succeeded":
+                return await message.answer("Оплата прошла! Подписка активна ✅")
+            elif result == "pending":
+                # даём кнопку вернуться на страницу оплаты или отменить
+                url = await get_payment_confirmation_url(payment_id)
+                kb = InlineKeyboardMarkup()
+                if url:
+                    kb.add(InlineKeyboardButton("Вернуться к оплате", url=url))
+                kb.add(InlineKeyboardButton("Отменить платёж", callback_data=f"cancelpay:{payment_id}"))
+                return await message.answer("Платёж ещё не подтверждён. Нажмите /check чуть позже.", reply_markup=kb)
+            else:
+                return await message.answer("Платёж не прошёл или был отменён. Попробуйте /subscribe ещё раз.")
+
         await message.answer(
             "Привет! Я — Конструктор тренировок от Физкультуры курильщика 🏋️‍♀️\n\n"
             "Выберите действие:",
