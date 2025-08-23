@@ -1,5 +1,5 @@
 from aiogram.types import ReplyKeyboardMarkup
-from constants import LEVELS, EQUIPMENT, LIMITATIONS, DURATION
+from constants import LEVELS, EQUIPMENT, LIMITATIONS, DURATION, DURATION_BEGINNER, EXTRA_MUSCLE_OPTIONS
 
 def _mk(rows, one_time: bool = False) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=one_time)
@@ -30,4 +30,19 @@ equipment_kb = _mk([
 ])
 
 # длительность
-duration_kb = _mk([DURATION], one_time=True)
+def duration_kb_for(level: str) -> ReplyKeyboardMarkup:
+    if level == "Я новичок":
+        # две кнопки «5-10» и «15-20»
+        return _mk([DURATION_BEGINNER], one_time=True)
+    # иначе показываем все варианты
+    return _mk([DURATION], one_time=True)
+
+def extras_kb() -> ReplyKeyboardMarkup:
+    rows = [
+        ["Трицепсы", "Дельты (плечи)"],
+        ["Икры", "Еще на спину"],
+        ["Еще на низ", "Еще на живот"],
+        ["Еще на грудь"],
+        ["Нет, не надо", "Готово"],
+    ]
+    return _mk(rows)

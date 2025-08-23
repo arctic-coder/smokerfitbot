@@ -6,3 +6,4 @@ class Form(StatesGroup):
     equipment = State()
     duration = State()
     email = State()
+    extras = State()

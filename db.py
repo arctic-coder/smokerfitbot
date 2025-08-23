@@ -39,8 +39,8 @@ async def _init_users_sqlite(conn):
             limitations TEXT,          -- JSON (list[str])
             equipment TEXT,            -- JSON (list[str])
             duration_minutes TEXT,
-            free_workout_used INTEGER DEFAULT 0  
-   
+            free_workout_used INTEGER DEFAULT 0,
+            extra_groups TEXT          -- JSON (list[str])
         )
     """)
     await conn.commit()
@@ -53,37 +53,42 @@ async def _init_users_pg(conn):
             limitations TEXT,
             equipment TEXT,
             duration_minutes TEXT,
-            free_workout_used BOOLEAN DEFAULT FALSE
+            free_workout_used BOOLEAN DEFAULT FALSE,
+            extra_groups TEXT
         )
     """)
 
-async def save_user(user_id, level, limitations, equipment, duration_minutes):
+async def save_user(user_id, level, limitations, equipment, duration_minutes, extra_groups=None):
     lim_json = json.dumps(limitations or [])
     eq_json  = json.dumps(equipment or [])
+    ex_json  = json.dumps(extra_groups or [])
     if USE_SQLITE:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("""
-                INSERT INTO users (user_id, level, limitations, equipment, duration_minutes)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (user_id, level, limitations, equipment, duration_minutes, extra_groups)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     level = excluded.level,
                     limitations = excluded.limitations,
                     equipment = excluded.equipment,
-                    duration_minutes = excluded.duration_minutes
-            """, (user_id, level, lim_json, eq_json, duration_minutes))
+                    duration_minutes = excluded.duration_minutes,
+                    extra_groups = excluded.extra_groups
+            """, (user_id, level, lim_json, eq_json, duration_minutes, ex_json))
             await db.commit()
     else:
         conn = await asyncpg.connect(PG_DSN)
         await conn.execute("""
-            INSERT INTO users (user_id, level, limitations, equipment, duration_minutes)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO users (user_id, level, limitations, equipment, duration_minutes, extra_groups)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (user_id) DO UPDATE SET
                 level = EXCLUDED.level,
                 limitations = EXCLUDED.limitations,
                 equipment = EXCLUDED.equipment,
-                duration_minutes = EXCLUDED.duration_minutes
-        """, user_id, level, lim_json, eq_json, duration_minutes)
+                duration_minutes = EXCLUDED.duration_minutes,
+                extra_groups = EXCLUDED.extra_groups
+        """, user_id, level, lim_json, eq_json, duration_minutes, ex_json)
         await conn.close()
+
 
 
 async def get_user(user_id):
@@ -97,7 +102,7 @@ async def get_user(user_id):
         await conn.close()
         if row:
             return (row["user_id"], row["level"], row["limitations"], row["equipment"],
-                    row["duration_minutes"], row["free_workout_used"])
+                    row["duration_minutes"], row["free_workout_used"]), row["extra_groups"]
         return None
 
 async def set_free_workout_used(user_id: int, used: bool = True):

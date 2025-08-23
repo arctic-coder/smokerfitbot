@@ -12,8 +12,8 @@ from yookassa.domain.exceptions.bad_request_error import BadRequestError
 from states import Form
 from utils import generate_workout
 from db import get_user, save_user, get_subscription, set_free_workout_used, get_last_pending_payment_id, upsert_subscription
-from keyboards import start_kb, level_kb, limitations_kb, equipment_kb, duration_kb
-from constants import LEVELS, LIMITATIONS, EQUIPMENT, DURATION
+from keyboards import start_kb, level_kb, limitations_kb, equipment_kb, duration_kb_for, extras_kb
+from constants import LEVELS, LIMITATIONS, EQUIPMENT, DURATION, DURATION_BEGINNER, EXTRA_MUSCLE_OPTIONS
 
 from billing.service import (
     start_or_resume_checkout, check_and_activate, cancel_subscription, is_active
@@ -128,7 +128,7 @@ def register_handlers(dp: Dispatcher) -> None:
             f"• Инвентарь: {', '.join(equipment) if equipment else 'Нет'}\n\n"
             "Выберите длительность тренировки:"
         )
-        await message.answer(text, reply_markup=duration_kb)
+        await message.answer(text, reply_markup=duration_kb_for(level))
 
     # --- анкета ---
     @dp.message_handler(state=Form.level)
@@ -173,7 +173,8 @@ def register_handlers(dp: Dispatcher) -> None:
         if message.text == "Готово":
             await state.update_data(equipment=current)
             await Form.duration.set()
-            return await message.answer("Выберите длительность тренировки:", reply_markup=duration_kb)
+            level = (await state.get_data()).get("level")
+            return await message.answer("Выберите длительность тренировки:", reply_markup=duration_kb_for(level))
 
         if message.text not in EQUIPMENT_SET:
             return await message.answer("Пожалуйста, выбери из кнопок.", reply_markup=equipment_kb)
@@ -193,12 +194,16 @@ def register_handlers(dp: Dispatcher) -> None:
 
     @dp.message_handler(state=Form.duration)
     async def process_duration(message: types.Message, state: FSMContext):
-        if message.text not in DURATION_SET:
-            return await message.answer("Пожалуйста, выбери из кнопок.", reply_markup=duration_kb)
+        data = await state.get_data()
+        level = data.get("level")
+
+        # допустимые варианты в зависимости от уровня
+        allowed = set(DURATION if level != "Я новичок" else DURATION_BEGINNER)
+        if message.text not in allowed:
+            return await message.answer("Пожалуйста, выбери из кнопок.", reply_markup=duration_kb_for(level))
 
         await state.update_data(duration_minutes=message.text)
 
-        # --- доступ: free + подписка ---
         user_id = message.from_user.id
         sub = await get_subscription(user_id)
         user_row = await get_user(user_id)
@@ -208,10 +213,8 @@ def register_handlers(dp: Dispatcher) -> None:
 
         if not is_active(sub):
             if not free_used:
-                # даём бесплатную попытку и помечаем
                 await set_free_workout_used(user_id, True)
             else:
-                # показываем пейволл
                 pay_kb = InlineKeyboardMarkup().add(
                     InlineKeyboardButton("Оформить подписку", callback_data="go_subscribe")
                 )
@@ -219,13 +222,82 @@ def register_handlers(dp: Dispatcher) -> None:
                     "Бесплатная тренировка уже использована.\nОформите подписку, чтобы продолжить.",
                     reply_markup=pay_kb
                 )
-                return  # выходим до генерации
+                return
 
-        # --- генерация ---
+        if level == "Больше года":
+            await state.update_data(extras=[])
+            await Form.extras.set()
+            return await message.answer(
+                "Вы хотите помимо базовых упражнений на спину, грудь, низ и живот добавить что-то еще? Выберите до двух вариантов",
+                reply_markup=extras_kb()
+            )
+
         user_data = await state.get_data()
         await message.answer("Спасибо! Генерирую тренировку...", reply_markup=ReplyKeyboardRemove())
 
-        workout = generate_workout(user_data)  # сейчас заглушка
+        workout = generate_workout(user_data)
+        if not workout:
+            await message.answer("К сожалению, не удалось подобрать подходящие упражнения 😢")
+        else:
+            text = "Ваша тренировка:\n\n"
+            for i, ex in enumerate(workout, start=1):
+                text += f"{i}. {ex['name']}\nСсылка: {ex['link']}\n\n"
+            await message.answer(text)
+
+        user_data = await state.get_data()
+        await save_user(
+            user_id=user_id,
+            level=user_data['level'],
+            limitations=user_data['limitations'],
+            equipment=user_data['equipment'],
+            duration_minutes=user_data['duration_minutes'],
+            extra_groups=user_data.get('extras') 
+        )
+        await state.finish()
+
+    @dp.message_handler(state=Form.extras)
+    async def process_extras(message: types.Message, state: FSMContext):
+        choice = message.text.strip()
+        data = await state.get_data()
+        current = data.get("extras", []) or []
+
+        # Валидация ввода
+        if choice not in EXTRA_MUSCLE_OPTIONS + ["Готово"]:
+            return await message.answer("Пожалуйста, выбери из кнопок.", reply_markup=extras_kb())
+
+        # Выбор «Нет, не надо» — сразу генерируем, без добавления
+        if choice == "Нет, не надо":
+            await state.update_data(extras=[])
+            return await _finalize_and_generate(message, state)
+
+        # Пользователь нажал «Готово»
+        if choice == "Готово":
+            if len(current) == 0:
+                # Разрешим без доп. групп
+                await state.update_data(extras=[])
+            elif len(current) <= 2:
+                pass
+            else:
+                return await message.answer("Можно выбрать не более двух пунктов. Сними лишние и нажми «Готово».", reply_markup=extras_kb())
+            return await _finalize_and_generate(message, state)
+
+        # Обычный выбор пункта
+        if choice in current:
+            # Повторный клик — просто игнорируем (или можно убрать из списка, если хочешь «переключатель»)
+            return await message.answer(f"Уже добавлено: {', '.join(current)}. Нажмите «Готово», когда закончите.", reply_markup=extras_kb())
+
+        if len(current) >= 2:
+            return await message.answer("Можно выбрать не более двух пунктов. Нажмите «Готово».", reply_markup=extras_kb())
+
+        current.append(choice)
+        await state.update_data(extras=current)
+        return await message.answer(f"Добавлено: {choice}\nВыбрано: {', '.join(current)}\nМожно выбрать ещё {2 - len(current)}.", reply_markup=extras_kb())
+
+    async def _finalize_and_generate(message: types.Message, state: FSMContext):
+        user_data = await state.get_data()
+        await message.answer("Спасибо! Генерирую тренировку...", reply_markup=ReplyKeyboardRemove())
+
+        workout = generate_workout(user_data)
         if not workout:
             await message.answer("К сожалению, не удалось подобрать подходящие упражнения 😢")
         else:
@@ -235,13 +307,15 @@ def register_handlers(dp: Dispatcher) -> None:
             await message.answer(text)
 
         await save_user(
-            user_id=user_id,
+            user_id=message.from_user.id,
             level=user_data['level'],
             limitations=user_data['limitations'],
             equipment=user_data['equipment'],
-            duration_minutes=user_data['duration_minutes']
+            duration_minutes=user_data['duration_minutes'],
+            extra_groups=user_data.get('extras')  
         )
         await state.finish()
+
 
     @dp.message_handler(commands='status', state="*")
     async def status_cmd(message: types.Message):
