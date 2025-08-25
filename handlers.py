@@ -235,14 +235,18 @@ def register_handlers(dp: Dispatcher) -> None:
         user_data = await state.get_data()
         await message.answer("Спасибо! Генерирую тренировку...", reply_markup=ReplyKeyboardRemove())
 
-        workout = generate_workout(user_data)
+        workout = await generate_workout(user_data)
         if not workout:
             await message.answer("К сожалению, не удалось подобрать подходящие упражнения 😢")
         else:
-            text = "Ваша тренировка:\n\n"
+            lines = ["Ваша тренировка:\n"]
             for i, ex in enumerate(workout, start=1):
-                text += f"{i}. {ex['name']}\nСсылка: {ex['link']}\n\n"
-            await message.answer(text)
+                group = f" ({ex.get('group')})" if ex.get("group") else ""
+                sets_reps = f"{ex.get('sets')}×{ex.get('reps')}"
+                link = f"\nСсылка: {ex.get('link')}" if ex.get("link") else ""
+                lines.append(f"{i}. {ex['name']}{group} — {sets_reps}{link}")
+            await message.answer("\n".join(lines))
+
 
         user_data = await state.get_data()
         await save_user(
@@ -297,14 +301,18 @@ def register_handlers(dp: Dispatcher) -> None:
         user_data = await state.get_data()
         await message.answer("Спасибо! Генерирую тренировку...", reply_markup=ReplyKeyboardRemove())
 
-        workout = generate_workout(user_data)
+        workout = await generate_workout(user_data)
         if not workout:
             await message.answer("К сожалению, не удалось подобрать подходящие упражнения 😢")
         else:
-            text = "Ваша тренировка:\n\n"
+            lines = ["Ваша тренировка:\n"]
             for i, ex in enumerate(workout, start=1):
-                text += f"{i}. {ex['name']}\nСсылка: {ex['link']}\n\n"
-            await message.answer(text)
+                group = f" ({ex.get('group')})" if ex.get("group") else ""
+                sets_reps = f"{ex.get('sets')}×{ex.get('reps')}"
+                link = f"\nСсылка: {ex.get('link')}" if ex.get("link") else ""
+                lines.append(f"{i}. {ex['name']}{group} — {sets_reps}{link}")
+            await message.answer("\n".join(lines))
+
 
         await save_user(
             user_id=message.from_user.id,

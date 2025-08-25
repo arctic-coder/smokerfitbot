@@ -546,6 +546,68 @@ async def cancel_other_pendings(user_id: int, keep_payment_id: str) -> int:
         finally:
             await conn.close()
 
+# db.py — вставить, например, под _init_exercises_pg()
+
+def _ensure_list(v):
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return v
+    try:
+        return json.loads(v) if isinstance(v, str) else []
+    except Exception:
+        return []
+
+async def get_all_exercises() -> list[dict]:
+    """
+    name:str, muscle_group:str, reps_note:str, video_url:str,
+    levels:list[str], equipment:list[str], equipment_dnf:list[list[str]], allowed_limitations:list[str]
+    """
+    if USE_SQLITE:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("""
+                SELECT name, levels, equipment, equipment_dnf, allowed_limitations,
+                       muscle_group, reps_note, video_url
+                  FROM exercises
+            """) as cur:
+                rows = await cur.fetchall()
+        # sqlite: индексы (tuple)
+        result = []
+        for r in rows:
+            result.append({
+                "name":               r[0],
+                "levels":             _ensure_list(r[1]),
+                "equipment":          _ensure_list(r[2]),
+                "equipment_dnf":      _ensure_list(r[3]),
+                "allowed_limitations":_ensure_list(r[4]),
+                "muscle_group":       r[5],
+                "reps_note":          r[6] or "",
+                "video_url":          r[7] or "",
+            })
+        return result
+    else:
+        conn = await asyncpg.connect(PG_DSN)
+        rows = await conn.fetch("""
+            SELECT name, levels, equipment, equipment_dnf, allowed_limitations,
+                   muscle_group, reps_note, video_url
+              FROM exercises
+        """)
+        await conn.close()
+        # pg: Record с уже «нормальными» типами (TEXT[], JSONB, …)
+        result = []
+        for r in rows:
+            result.append({
+                "name":               r["name"],
+                "levels":             list(r["levels"] or []),
+                "equipment":          list(r["equipment"] or []),
+                "equipment_dnf":      r["equipment_dnf"] or [],
+                "allowed_limitations":list(r["allowed_limitations"] or []),
+                "muscle_group":       r["muscle_group"],
+                "reps_note":          r["reps_note"] or "",
+                "video_url":          r["video_url"] or "",
+            })
+        return result
+
 
 # -------- init all --------
 async def init_db():
