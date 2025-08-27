@@ -4,6 +4,7 @@ import ast
 from aiogram import Dispatcher, types
 from aiogram.dispatcher import FSMContext
 from aiogram.types import ReplyKeyboardRemove
+from html import escape
 
 from states import Form
 from utils import generate_workout
@@ -219,11 +220,13 @@ async def _generate_and_send_workout(message: types.Message, state: FSMContext) 
         lines = [WORKOUT_HEADER]
         for i, ex in enumerate(workout, start=1):
             name = ex.get("name") or ex.get("title") or "Упражнение"
-            group = f" ({ex.get('group')})" if ex.get("group") else ""
-            sets_reps = f"{ex.get('sets')}×{ex.get('reps')}" if ex.get("sets") and ex.get("reps") else ""
-            link = f"\nСсылка: {ex.get('link')}" if ex.get("link") else ""
-            lines.append(f"{i}. {name}{group} — {sets_reps}{link}")
-        await message.answer("\n".join(lines))
+            group = f"{ex.get('group')}" if ex.get("group") else ""
+            sets_reps = f"{ex.get('sets')} × {ex.get('reps')}" if ex.get("sets") and ex.get("reps") else ""
+            url = ex.get("link")
+            if url:
+                name = f'<a href="{url}">{name}</a>'
+            lines.append(f"<b>{group}</b>: {name}: {sets_reps}")
+        await message.answer("\n\n".join(lines), parse_mode="HTML")
 
     # сохраняем анкету
     try:

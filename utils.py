@@ -35,10 +35,8 @@ def _equipment_options_ok(user_eq: list[str], options: list) -> bool:
         if not isinstance(opt, list):
             continue
         opt_norm = [str(x).strip() for x in opt if str(x).strip()]
-        # КЛЮЧЕВАЯ ПРАВКА: разрешаем безинвентарные упражнения при любом наборе пользователя
         if opt_norm == [BTN_EQUIP_NONE]:
             return True
-        # обычный случай: весь требуемый инвентарь есть у пользователя
         if set(opt_norm).issubset(user_set):
             return True
     return False
@@ -62,7 +60,6 @@ def _to_items(ex_list: Iterable[dict], sets: int) -> list[dict]:
             "name":  ex["name"],
             "group": ex.get("muscle_group") or "",
             "sets":  sets,
-            # по ТЗ «сколько там повторений в таблице» — показываем reps_note как есть
             "reps":  ex.get("reps_note") or "10",
             "link":  ex.get("video_url") or "",
         })
