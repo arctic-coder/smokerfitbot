@@ -206,14 +206,14 @@ async def upsert_subscription(user_id: int, **fields):
         if not existing_row:
             return incoming
 
-        # извлечём старые значения из row (sqlite tuple или asyncpg Record)
-        if hasattr(existing_row, "keys"):
-            old_status = existing_row.get("status")
-            old_cpe = existing_row.get("current_period_end")
-        else:
-            # порядок колонок: user_id, status, payment_method_id, current_period_end, next_charge_at, amount, currency, created_at, updated_at
+        try:
+            # asyncpg.Record
+            old_status = existing_row["status"]
+            old_cpe    = existing_row["current_period_end"]
+        except Exception:
+            # sqlite tuple
             old_status = existing_row[1]
-            old_cpe = existing_row[3]
+            old_cpe    = existing_row[3]
 
         old_cpe_dt = _parse_iso(old_cpe)
         now_dt = datetime.now(timezone.utc)
@@ -365,16 +365,12 @@ async def mark_payment_applied(payment_id: str) -> bool:
         conn = await asyncpg.connect(PG_DSN)
         try:
             row = await conn.fetchrow(
-                "SELECT applied FROM payments WHERE payment_id=$1", payment_id
+                "UPDATE payments SET applied_at = NOW() "
+                "WHERE payment_id = $1 AND applied_at IS NULL "
+                "RETURNING applied_at",
+                payment_id
             )
-            if row and row["applied"]:
-                return False
-
-            await conn.execute(
-                "UPDATE payments SET applied = TRUE, updated_at = NOW() WHERE payment_id=$1",
-                payment_id,
-            )
-            return True
+            return bool(row)  # True -> мы первые отметили платёж как применённый
         finally:
             await conn.close()
 
