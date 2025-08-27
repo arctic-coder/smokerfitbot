@@ -390,20 +390,29 @@ async def _init_exercises_sqlite(conn):
     """)
     await conn.commit()
 
+# db.py
 async def _init_exercises_pg(conn):
+    # Таблица "exercises": массивы и jsonb с дефолтами — как ожидает генератор
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS exercises (
-            id SERIAL PRIMARY KEY,
-            name TEXT UNIQUE NOT NULL,
-            levels TEXT[],
-            equipment TEXT[],
-            equipment_dnf JSONB,
-            allowed_limitations TEXT[],
-            muscle_group TEXT,
-            reps_note TEXT,
-            video_url TEXT
-        )
+          name                TEXT PRIMARY KEY,
+          levels              TEXT[] NOT NULL DEFAULT '{}',
+          equipment           TEXT[] NOT NULL DEFAULT '{}',
+          equipment_dnf       JSONB  NOT NULL DEFAULT '[]'::jsonb,
+          allowed_limitations TEXT[] NOT NULL DEFAULT '{}',
+          muscle_group        TEXT NOT NULL,
+          reps_note           TEXT,
+          video_url           TEXT
+        );
     """)
+
+    # Индексы под фильтрацию генератора (выполняются безопасно повторно)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_levels     ON exercises USING GIN (levels);")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_equipment  ON exercises USING GIN (equipment);")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_limits     ON exercises USING GIN (allowed_limitations);")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_eqdnf      ON exercises USING GIN (equipment_dnf);")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_group      ON exercises (muscle_group);")
+
 
 async def upsert_payment_status(
     user_id: int, payment_id: str, amount: int, currency: str,
