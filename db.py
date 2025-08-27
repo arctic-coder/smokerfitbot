@@ -111,8 +111,15 @@ async def get_user(user_id):
         row = await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
         await conn.close()
         if row:
-            return (row["user_id"], row["level"], row["limitations"], row["equipment"],
-                    row["duration_minutes"], row["free_workout_used"]), row["extra_groups"]
+            return (
+                row["user_id"],
+                row["level"],
+                row["limitations"],
+                row["equipment"],
+                row["duration_minutes"],
+                row["free_workout_used"],
+                row["extra_groups"],
+            )
         return None
 
 async def set_free_workout_used(user_id: int, used: bool = True):
