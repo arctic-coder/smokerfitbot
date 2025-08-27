@@ -78,11 +78,14 @@ def build_sql(json_path: str, out_path: str):
         ))
 
     sha = hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-    stmts.append(f"INSERT INTO seed_meta(key,value) VALUES('exercises_json_sha',{q(sha)}) "
-                 f"ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, applied_at=now();\n")
+    stmts.append(
+        f"INSERT INTO seed_meta(key,value) VALUES('exercises_json_sha',{q(sha)}) "
+        f"ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, applied_at=now();\n"
+    )
     stmts.append(FOOTER)
 
     Path(out_path).write_text("".join(stmts), encoding="utf-8")
+
 
 if __name__ == "__main__":
     import argparse
