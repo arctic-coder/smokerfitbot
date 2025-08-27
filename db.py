@@ -15,6 +15,16 @@ PG_DSN = os.getenv("DATABASE_URL")
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+def _to_pg_timestamp(v) -> datetime | None:
+    """
+    Преобразует str|datetime|None -> naive UTC datetime (для колонок TIMESTAMP в PG).
+    """
+    dt = _parse_iso(v)
+    if not dt:
+        return None
+    # Для TIMESTAMP (без таймзоны) в PG лучше передавать naive UTC
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
 def _parse_iso(dt_val):
     """
     Принимает str | datetime | None -> возвращает aware datetime в UTC или None.
@@ -238,6 +248,12 @@ async def upsert_subscription(user_id: int, **fields):
         conn = await asyncpg.connect(PG_DSN)
         row = await conn.fetchrow("SELECT * FROM subscriptions WHERE user_id = $1", user_id)
         fields = _sanitize(row, fields)
+
+        # нормализуем типы дат для PG (TIMESTAMP): ожидается datetime, не строка
+        for k in ("current_period_end", "next_charge_at"):
+            if k in fields:
+                fields[k] = _to_pg_timestamp(fields[k])
+
 
         cols = list(fields.keys())
         vals = list(fields.values())
@@ -477,15 +493,14 @@ async def get_last_pending_payment_id(user_id: int) -> str | None:
         await conn.close()
         return row["payment_id"] if row else None
     
-
-async def list_due_subscriptions(now_iso: str):
+async def list_due_subscriptions(now_dt: datetime):
     """
-    Возвращает список user_id, для которых нужно попытаться автосписание:
-      - status = 'active'
-      - payment_method_id IS NOT NULL
-      - next_charge_at <= now
+    Возвращает список user_id, кому пора списывать.
+    now_dt — aware datetime (UTC).
     """
     if USE_SQLITE:
+        # в SQLite даты хранятся как TEXT → сравниваем по ISO-строке
+        now_iso = (now_dt.astimezone(timezone.utc)).isoformat()
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("""
                 SELECT user_id
@@ -499,16 +514,21 @@ async def list_due_subscriptions(now_iso: str):
                 return [r[0] for r in rows]
     else:
         conn = await asyncpg.connect(PG_DSN)
-        rows = await conn.fetch("""
-            SELECT user_id
-              FROM subscriptions
-             WHERE status = 'active'
-               AND payment_method_id IS NOT NULL
-               AND next_charge_at IS NOT NULL
-               AND next_charge_at <= $1
-        """, now_iso)
-        await conn.close()
-        return [r["user_id"] for r in rows]
+        try:
+            # для TIMESTAMP без таймзоны — передаём naive UTC
+            pg_now = now_dt.astimezone(timezone.utc).replace(tzinfo=None)
+            rows = await conn.fetch("""
+                SELECT user_id
+                  FROM subscriptions
+                 WHERE status = 'active'
+                   AND payment_method_id IS NOT NULL
+                   AND next_charge_at IS NOT NULL
+                   AND next_charge_at <= $1
+            """, pg_now)
+            return [r["user_id"] for r in rows]
+        finally:
+            await conn.close()
+
     
 async def cancel_other_pendings(user_id: int, keep_payment_id: str) -> int:
     """

@@ -104,8 +104,8 @@ async def check_and_activate(user_id: int, payment_id: str):
             user_id,
             status="active",
             payment_method_id=pm_id or (sub[2] if sub else None),
-            current_period_end=new_cpe.isoformat(),
-            next_charge_at=next_charge_at.isoformat(),
+            current_period_end=new_cpe,
+            next_charge_at=next_charge_at,
             amount=amount_int,
             currency=p.amount.currency
         )
@@ -240,8 +240,8 @@ async def charge_recurring(user_id: int):
         await upsert_subscription(
             user_id,
             status="active",
-            current_period_end=new_cpe.isoformat(),
-            next_charge_at=next_charge_at.isoformat(),
+            current_period_end=new_cpe,
+            next_charge_at=next_charge_at,
             amount=amount_int,
             currency=payment.amount.currency
         )
@@ -269,7 +269,7 @@ async def charge_recurring(user_id: int):
             cpe_dt = cpe_dt.astimezone(timezone.utc)
 
     retry_at = min(cpe_dt, now + timedelta(hours=12)) if cpe_dt else (now + timedelta(hours=12))
-    await upsert_subscription(user_id, next_charge_at=retry_at.isoformat())
+    await upsert_subscription(user_id, next_charge_at=retry_at)
     return "failed"
 
 
@@ -280,8 +280,8 @@ async def charge_due_subscriptions():
     Фильтр: status='active', payment_method_id NOT NULL, next_charge_at <= now.
     """
     from db import list_due_subscriptions
-    now_iso = datetime.now(timezone.utc).isoformat()
-    due = await list_due_subscriptions(now_iso)
+    now_dt = datetime.now(timezone.utc)
+    due = await list_due_subscriptions(now_dt)
     results = {"succeeded": 0, "pending": 0, "failed": 0, "skipped": 0}
     for user_id in due:
         res = await charge_recurring(user_id)
