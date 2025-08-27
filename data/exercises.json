@@ -113,7 +113,12 @@
         "Петли"
       ]
     ],
-    "allowed_limitations": [],
+    "allowed_limitations": [
+      "Нет ограничений",
+      "Больные колени",
+      "Межпозвоночные грыжи/протрузии",
+      "Большой вес"
+    ],
     "muscle_group": "Спина",
     "reps_note": "10 - 15",
     "video_url": "https://drive.google.com/file/d/1KQVqgMGGxB0QUB7HUufRuqsDynHmUocd/view?usp=drive_link"
@@ -132,7 +137,12 @@
         "Петли"
       ]
     ],
-    "allowed_limitations": [],
+    "allowed_limitations": [
+      "Нет ограничений",
+      "Больные колени",
+      "Межпозвоночные грыжи/протрузии",
+      "Большой вес"
+    ],
     "muscle_group": "Спина",
     "reps_note": "10 - 15",
     "video_url": "https://drive.google.com/file/d/1e7uLId3JEPS4nBiGZRNzjWfvFBHRXrIJ/view?usp=drive_link"
@@ -151,7 +161,12 @@
         "Турник"
       ]
     ],
-    "allowed_limitations": [],
+    "allowed_limitations": [
+      "Нет ограничений",
+      "Больные колени",
+      "Межпозвоночные грыжи/протрузии",
+      "Большой вес"
+    ],
     "muscle_group": "Спина",
     "reps_note": "максимум",
     "video_url": "https://drive.google.com/file/d/1JA2sX-hdR2lr5WOm4hbvY-kTBbQX3jqp/view?usp=drive_link"
@@ -170,9 +185,14 @@
         "Тренажерный зал"
       ]
     ],
-    "allowed_limitations": [],
+    "allowed_limitations": [
+      "Нет ограничений",
+      "Больные колени",
+      "Межпозвоночные грыжи/протрузии",
+      "Большой вес"
+    ],
     "muscle_group": "Спина",
-    "reps_note": "10–12",
+    "reps_note": "10 - 12",
     "video_url": "https://drive.google.com/file/d/1XXi6hP3-99iqag895Svgz4YU1vVhGJI5/view?usp=drive_link"
   },
   {
@@ -549,7 +569,10 @@
   },
   {
     "name": "Боковая планка",
-    "levels": [],
+    "levels": [
+      "Середнячок",
+      "Продолжающий"
+    ],
     "equipment": [],
     "equipment_dnf": [
       [
@@ -919,7 +942,12 @@
         "Ничего"
       ]
     ],
-    "allowed_limitations": [],
+    "allowed_limitations": [
+      "Нет ограничений",
+      "Больные колени",
+      "Межпозвоночные грыжи/протрузии",
+      "Большой вес"
+    ],
     "muscle_group": "Живот",
     "reps_note": "10 - 30",
     "video_url": "https://drive.google.com/file/d/1aSusfOoC3L18cjl3lvxv514HBy53ywpD/view?usp=drive_link"
@@ -1623,7 +1651,10 @@
         "Ничего"
       ]
     ],
-    "allowed_limitations": [],
+    "allowed_limitations": [
+      "Нет ограничений",
+      "Межпозвоночные грыжи/протрузии"
+    ],
     "muscle_group": "Ноги",
     "reps_note": "10 - 15",
     "video_url": "https://drive.google.com/file/d/1Kzllqj20_ZIRVcToN6u9dITcLRJRqmeC/view?usp=drive_link"
@@ -2693,7 +2724,7 @@
       "Большой вес"
     ],
     "muscle_group": "Плечи",
-    "reps_note": "10-15",
+    "reps_note": "10 - 15",
     "video_url": "https://drive.google.com/file/d/108fA-nHGm2Z7h-z_dvKMQxnQ3ZprHkCY/view?usp=drive_link"
   },
   {

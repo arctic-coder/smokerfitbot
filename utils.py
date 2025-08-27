@@ -2,7 +2,7 @@
 import random
 from typing import Iterable
 from db import get_all_exercises
-from constants import BASE_GROUPS, EXTRA_BUTTON_TO_GROUP
+from texts import BASE_GROUPS, BTN_15_20, BTN_35_45, BTN_5_10, BTN_EQUIP_NONE, BTN_LIMIT_NO, EXTRA_BUTTON_TO_GROUP
 
 # ---- фильтры совместимости ----
 
@@ -12,7 +12,7 @@ def _level_ok(user_level: str, ex_levels: list[str]) -> bool:
 
 def _limitations_ok(user_limits: list[str], ex_allowed: list[str]) -> bool:
     # «Нет ограничений» или пусто — всё ок
-    if not user_limits or "Нет ограничений" in user_limits:
+    if not user_limits or BTN_LIMIT_NO in user_limits:
         return True
     # если упражнение не ограничивает — трактуем как «можно всем»
     if not ex_allowed:
@@ -20,28 +20,29 @@ def _limitations_ok(user_limits: list[str], ex_allowed: list[str]) -> bool:
     # все ограничения пользователя должны быть разрешены упражнением
     return all(l in ex_allowed for l in user_limits)
 
+# utils.py
+
 def _equipment_options_ok(user_eq: list[str], options: list) -> bool:
     """
-    options — это list[list[str]] из твоей таблицы (варианты наборов инвентаря).
-    Возвращаем True, если есть хотя бы одна опция, которая целиком покрывается пользовательским набором.
-    Спец-случай: ["Ничего"] — подходит только, если у пользователя «Ничего».
+    options — list[list[str]] (варианты наборов инвентаря).
+    True, если есть опция, целиком покрываемая пользовательским набором.
+    Спец-случай: ["Ничего"] — подходит ВСЕГДА (упражнение без инвентаря).
     """
     user_set = set(user_eq or [])
     if not options:
-        # если опции не заданы — допускаем по умолчанию
         return True
     for opt in options:
         if not isinstance(opt, list):
             continue
         opt_norm = [str(x).strip() for x in opt if str(x).strip()]
-        if opt_norm == ["Ничего"]:
-            if "Ничего" in user_set or not user_set:
-                return True
-            continue
-        # обычный случай: вся комбинация должна быть у пользователя
+        # КЛЮЧЕВАЯ ПРАВКА: разрешаем безинвентарные упражнения при любом наборе пользователя
+        if opt_norm == [BTN_EQUIP_NONE]:
+            return True
+        # обычный случай: весь требуемый инвентарь есть у пользователя
         if set(opt_norm).issubset(user_set):
             return True
     return False
+
 
 # ---- сборка плана ----
 
@@ -97,19 +98,19 @@ async def generate_workout(user_data: dict) -> list[dict]:
     plan: list[dict] = []
 
     # 3) Логика по длительности
-    if dur == "5-10":
+    if dur == BTN_5_10:
         # базовые группы по 1 упражнению, сетов = 1
         picks = [_pick_one(by_group.get(g, []), used_names) for g in BASE_GROUPS]
         used_names.update(ex["name"] for ex in picks if ex)
         plan = _to_items(picks, sets=1)
 
-    elif dur == "15-20":
+    elif dur == BTN_15_20:
         # базовые группы по 1 упражнению, сетов = 2
         picks = [_pick_one(by_group.get(g, []), used_names) for g in BASE_GROUPS]
         used_names.update(ex["name"] for ex in picks if ex)
         plan = _to_items(picks, sets=2)
 
-    elif dur == "35-45":
+    elif dur == BTN_35_45:
         # нормализуем «доп. группы»
         raw_extras = user_data.get("extras", []) or []
         extras_groups = []
