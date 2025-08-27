@@ -362,18 +362,21 @@ async def mark_payment_applied(payment_id: str) -> bool:
             await db.commit()
             return cur.rowcount > 0  # True -> можно продлевать
     else:
-        async with asyncpg.connect(PG_DSN) as conn:
-            res = await conn.execute(
-                """
-                UPDATE payments
-                SET applied_at = NOW()
-                WHERE payment_id = $1
-                AND applied_at IS NULL
-                """,
-                payment_id
+        conn = await asyncpg.connect(PG_DSN)
+        try:
+            row = await conn.fetchrow(
+                "SELECT applied FROM payments WHERE payment_id=$1", payment_id
             )
-            #  'UPDATE 1' / 'UPDATE 0'
-            return res.split()[-1] == "1"
+            if row and row["applied"]:
+                return False
+
+            await conn.execute(
+                "UPDATE payments SET applied = TRUE, updated_at = NOW() WHERE payment_id=$1",
+                payment_id,
+            )
+            return True
+        finally:
+            await conn.close()
 
 async def _init_exercises_sqlite(conn):
     await conn.execute("""
