@@ -2,7 +2,7 @@
 import asyncio
 import os, uuid
 import json, copy, re, logging
-from requests.exceptions import Timeout, ConnectionError, RequestException
+from requests.exceptions import Timeout, ConnectionError, RequestException, HTTPError
 
 from yookassa import Configuration, Payment, Webhook
 from yookassa.domain.exceptions import ApiError
@@ -24,6 +24,26 @@ log = logging.getLogger("billing.yookassa")
 # ==== Исключение сети ====
 class YookassaNetworkError(Exception):
     pass
+
+def _log_requests_error(prefix: str, exc: Exception):
+    """
+    Логирует статус, X-Request-Id и тело ответа, если исключение пришло из requests
+    (HTTPError/RequestException) и в нём есть .response.
+    """
+    r = getattr(exc, "response", None)
+    if r is not None:
+        try:
+            text = r.text  # тело ответа (JSON с description)
+        except Exception:
+            text = "<unreadable body>"
+        req_id = r.headers.get("X-Request-Id") or r.headers.get("x-request-id")
+        try:
+            # не падаем на потенциальной бинарщине
+            log.error("%s: http=%s request_id=%s body=%s", prefix, r.status_code, req_id, text)
+        except Exception:
+            log.error("%s: http=%s request_id=%s (body not logged)", prefix, r.status_code, req_id)
+    else:
+        log.error("%s: %r (no response attached)", prefix, exc)
 
 
 # ==== Утилиты маскировки и конфигурации ====
@@ -85,39 +105,35 @@ def _make_receipt(email: str | None, amount_value: str):
 
 # ==== НИЗКОУРОВНЕВЫЕ ВЫЗОВЫ API С ЛОГАМИ ====
 async def _payment_create_async(payload: dict, idem: str):
-    """POST /v3/payments с логированием запроса/ответа/ошибок."""
+    """POST /v3/payments с логированием запроса/ответа/ошибок (включая тело 4xx)."""
     _ensure_config()
-    # DEBUG: исходящий payload (замаскирован)
     log.debug("YK request Payment.create: idem=%s payload=%s",
               idem, json.dumps(_redact_payload(payload), ensure_ascii=False))
     try:
         p = await asyncio.to_thread(Payment.create, payload, idem)
-        # INFO: коротко
         status = getattr(p, "status", None)
         pid = getattr(p, "id", None)
         conf_obj = getattr(p, "confirmation", None)
         conf_url = getattr(conf_obj, "confirmation_url", None) if conf_obj else None
         log.info("YK response Payment.create: id=%s status=%s", pid, status)
-        # DEBUG: полный ответ
         try:
-            log.debug("YK response Payment.create: confirmation_url=%s body=%s",
-                      conf_url, p.json())
+            log.debug("YK response Payment.create: confirmation_url=%s body=%s", conf_url, p.json())
         except Exception:
-            # На всякий — сериализация asdict
             log.debug("YK response Payment.create: confirmation_url=%s (json() failed)", conf_url)
         return p
 
     except ApiError as e:
-        # Ошибка со стороны API (403/401/400/422 и т.д.)
         http = getattr(e, "http_code", None)
         req_id = getattr(e, "request_id", None)
         code = getattr(e, "code", e.__class__.__name__)
         msg = getattr(e, "message", str(e))
         params = getattr(e, "params", None)
-        log.error(
-            "YK API error Payment.create: http=%s request_id=%s code=%s message=%s params=%s idem=%s payload=%s",
-            http, req_id, code, msg, params, idem, json.dumps(_redact_payload(payload), ensure_ascii=False)
-        )
+        log.error("YK API error Payment.create: http=%s request_id=%s code=%s message=%s params=%s idem=%s payload=%s",
+                  http, req_id, code, msg, params, idem, json.dumps(_redact_payload(payload), ensure_ascii=False))
+        raise
+
+    except HTTPError as e:  # важно: до RequestException
+        _log_requests_error("YK HTTP error Payment.create", e)
         raise
 
     except Timeout:
@@ -126,12 +142,14 @@ async def _payment_create_async(payload: dict, idem: str):
     except ConnectionError:
         log.error("YK connection error on Payment.create idem=%s", idem)
         raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa")
-    except RequestException:
-        log.error("YK generic network error on Payment.create idem=%s", idem)
+    except RequestException as e:
+        # сюда падают прочие ошибки requests (включая 4xx/5xx, если SDK не преобразовал в ApiError)
+        _log_requests_error("YK generic network error on Payment.create", e)
         raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
 
+
 async def _payment_find_async(payment_id: str):
-    """GET /v3/payments/{id} с логированием."""
+    """GET /v3/payments/{id} с логированием тела на ошибках."""
     _ensure_config()
     log.debug("YK request Payment.find_one: id=%s", payment_id)
     try:
@@ -142,16 +160,18 @@ async def _payment_find_async(payment_id: str):
         except Exception:
             pass
         return p
+
     except ApiError as e:
         http = getattr(e, "http_code", None)
         req_id = getattr(e, "request_id", None)
         code = getattr(e, "code", e.__class__.__name__)
         msg = getattr(e, "message", str(e))
         params = getattr(e, "params", None)
-        log.error(
-            "YK API error Payment.find_one: http=%s request_id=%s code=%s message=%s params=%s payment_id=%s",
-            http, req_id, code, msg, params, payment_id
-        )
+        log.error("YK API error Payment.find_one: http=%s request_id=%s code=%s message=%s params=%s payment_id=%s",
+                  http, req_id, code, msg, params, payment_id)
+        raise
+    except HTTPError as e:
+        _log_requests_error("YK HTTP error Payment.find_one", e)
         raise
     except Timeout:
         log.error("YK network timeout on Payment.find_one id=%s", payment_id)
@@ -159,43 +179,9 @@ async def _payment_find_async(payment_id: str):
     except ConnectionError:
         log.error("YK connection error on Payment.find_one id=%s", payment_id)
         raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa")
-    except RequestException:
-        log.error("YK generic network error on Payment.find_one id=%s", payment_id)
+    except RequestException as e:
+        _log_requests_error("YK generic network error on Payment.find_one", e)
         raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
-
-async def _payment_cancel_async(payment_id: str):
-    """POST /v3/payments/{id}/cancel с логированием."""
-    _ensure_config()
-    log.debug("YK request Payment.cancel: id=%s", payment_id)
-    try:
-        p = await asyncio.to_thread(Payment.cancel, payment_id)
-        log.info("YK response Payment.cancel: id=%s status=%s", getattr(p, "id", None), getattr(p, "status", None))
-        try:
-            log.debug("YK response Payment.cancel: body=%s", p.json())
-        except Exception:
-            pass
-        return p
-    except ApiError as e:
-        http = getattr(e, "http_code", None)
-        req_id = getattr(e, "request_id", None)
-        code = getattr(e, "code", e.__class__.__name__)
-        msg = getattr(e, "message", str(e))
-        params = getattr(e, "params", None)
-        log.error(
-            "YK API error Payment.cancel: http=%s request_id=%s code=%s message=%s params=%s payment_id=%s",
-            http, req_id, code, msg, params, payment_id
-        )
-        raise
-    except Timeout:
-        log.error("YK network timeout on Payment.cancel id=%s", payment_id)
-        raise YookassaNetworkError("ЮKassa: время ожидания истекло")
-    except ConnectionError:
-        log.error("YK connection error on Payment.cancel id=%s", payment_id)
-        raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa")
-    except RequestException:
-        log.error("YK generic network error on Payment.cancel id=%s", payment_id)
-        raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
-
 
 # ==== ВЫСОКОУРОВНЕВЫЕ ОБЁРТКИ ДЛЯ ПРИЛОЖЕНИЯ ====
 async def create_checkout_payment(user_id: int, email: str | None, description: str = SUBSCRIPTION_TITLE):
