@@ -1,4 +1,4 @@
-import os
+import logging, os
 import asyncio
 import signal
 import contextlib
@@ -59,16 +59,29 @@ async def _autobiller_loop():
             log.exception("autobiller error: %s", e)
         await asyncio.sleep(600)  # 10 минут
 
+def setup_logging():
+    level_name = os.getenv("LOG_LEVEL", "DEBUG").upper()  # ставь DEBUG для локальных тестов
+    logging.basicConfig(
+        level=getattr(logging, level_name, logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+        force=True,  
+    )
+    logging.getLogger("aiogram").setLevel(logging.WARNING)
+    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+    logging.getLogger("asyncpg").setLevel(logging.INFO)
+    logging.getLogger("aiosqlite").setLevel(logging.WARNING)
+
+
+    logging.getLogger("workout").setLevel(logging.DEBUG)
+
 
 # --- Приложение ---------------------------------------------------------------
 
 async def main():
     # базовая инициализация
     load_dotenv()
-    logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO"),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    setup_logging()
     log.info("Starting bot...")
 
     await init_db()
