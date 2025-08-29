@@ -3,6 +3,7 @@ import asyncio
 import signal
 import contextlib
 import logging
+import json
 
 from aiohttp import web
 from dotenv import load_dotenv
@@ -32,6 +33,15 @@ async def yookassa_webhook(request: web.Request):
         data = await request.json()
     except Exception:
         return web.Response(status=400, text="bad json")
+    
+    # ЛОГ ВХОДЯЩЕГО ВЕБХУКА
+    try:
+        evt = (data or {}).get("event")
+        obj = (data or {}).get("object") or {}
+        log.info("yookassa_webhook: event=%s id=%s status=%s", evt, obj.get("id"), obj.get("status"))
+        log.debug("yookassa_webhook: body=%s", json.dumps(data, ensure_ascii=False))
+    except Exception:
+        log.exception("yookassa_webhook: failed to log incoming payload")
 
     # ожидаем форму {"event": "...", "object": {"id": "pay_...", "status": "...", ...}}
     payment = (data or {}).get("object") or {}
@@ -72,8 +82,11 @@ def setup_logging():
     logging.getLogger("asyncpg").setLevel(logging.INFO)
     logging.getLogger("aiosqlite").setLevel(logging.WARNING)
 
+    logging.getLogger("workout").setLevel(logging.INFO)
 
-    logging.getLogger("workout").setLevel(logging.DEBUG)
+    logging.getLogger("urllib3").setLevel(logging.DEBUG)
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.DEBUG)
+    logging.getLogger("billing.yookassa").setLevel(logging.DEBUG)
 
 
 # --- Приложение ---------------------------------------------------------------

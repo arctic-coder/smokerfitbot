@@ -4,6 +4,8 @@ from db import (
     get_payment_confirmation_url, get_subscription, insert_payment, mark_payment_applied, cancel_other_pendings 
 )
 from billing.yookassa_client import create_checkout_payment, get_payment, create_recurring_payment
+import logging
+log = logging.getLogger("billing.service")
 
 def _next_month(dt: datetime) -> datetime:
     month = dt.month + 1
