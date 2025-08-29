@@ -592,6 +592,50 @@ def _ensure_list(v):
         return json.loads(v) if isinstance(v, str) else []
     except Exception:
         return []
+    
+def _ensure_eqdnf(v) -> list[list[str]]:
+    """
+    Возвращает list[list[str]] независимо от того, пришло ли это
+    как JSON-строка, JSONB, список строк и т.п.
+    """
+    if v is None or v == "":
+        return []
+
+    # Верхний уровень может быть строкой с JSON
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            v = json.loads(s)
+        except Exception:
+            return [[s]] if s else []
+
+    if not isinstance(v, list):
+        return []
+
+    out: list[list[str]] = []
+    for opt in v:
+        if isinstance(opt, list):
+            cleaned = [str(x).strip() for x in opt if str(x).strip()]
+            if cleaned:
+                out.append(cleaned)
+        elif isinstance(opt, str):
+            s = opt.strip()
+            if not s:
+                continue
+            # Вложенная JSON-строка?
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    cleaned = [str(x).strip() for x in parsed if str(x).strip()]
+                    if cleaned:
+                        out.append(cleaned)
+                else:
+                    out.append([s])
+            except Exception:
+                out.append([s])
+        # остальные типы пропускаем
+    return out
+
 
 async def get_all_exercises() -> list[dict]:
     """
@@ -613,7 +657,7 @@ async def get_all_exercises() -> list[dict]:
                 "name":               r[0],
                 "levels":             _ensure_list(r[1]),
                 "equipment":          _ensure_list(r[2]),
-                "equipment_dnf":      _ensure_list(r[3]),
+                "equipment_dnf":      _ensure_eqdnf(_ensure_list(r[3])),
                 "allowed_limitations":_ensure_list(r[4]),
                 "muscle_group":       r[5],
                 "reps_note":          r[6] or "",
@@ -635,7 +679,7 @@ async def get_all_exercises() -> list[dict]:
                 "name":               r["name"],
                 "levels":             list(r["levels"] or []),
                 "equipment":          list(r["equipment"] or []),
-                "equipment_dnf":      r["equipment_dnf"] or [],
+                "equipment_dnf":      _ensure_eqdnf(r["equipment_dnf"] or []),
                 "allowed_limitations":list(r["allowed_limitations"] or []),
                 "muscle_group":       r["muscle_group"],
                 "reps_note":          r["reps_note"] or "",
