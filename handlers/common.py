@@ -48,7 +48,7 @@ async def start_cmd(message: types.Message, state: FSMContext) -> None:
             await message.answer(PAYMENT_FAILED)
         return
 
-    await message.answer(START_MESSAGE, parse_mode="HTML", reply_markup=start_kb)
+    await message.answer(START_MESSAGE, parse_mode="HTML", disable_web_page_preview=True, reply_markup=start_kb)
 
 def register_common_handlers(dp: Dispatcher) -> None:
     dp.register_message_handler(start_cmd, commands="start", state="*")
