@@ -24,6 +24,8 @@ def jsonb_literal(obj) -> str:
 DDL = """-- Generated SQL to seed 'exercises' table (DDL + UPSERTs)
 SET client_encoding = 'UTF8';
 
+DROP TABLE exercises;
+
 CREATE TABLE IF NOT EXISTS exercises (
   name                TEXT PRIMARY KEY,
   levels              TEXT[],
@@ -33,12 +35,6 @@ CREATE TABLE IF NOT EXISTS exercises (
   muscle_group        TEXT NOT NULL,
   reps_note           TEXT,
   video_url           TEXT
-);
-
-CREATE TABLE IF NOT EXISTS seed_meta (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL,
-  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 BEGIN;
@@ -77,11 +73,6 @@ def build_sql(json_path: str, out_path: str):
             video_url=q(item.get("video_url")) if item.get("video_url") else "NULL",
         ))
 
-    sha = hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-    stmts.append(
-        f"INSERT INTO seed_meta(key,value) VALUES('exercises_json_sha',{q(sha)}) "
-        f"ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, applied_at=now();\n"
-    )
     stmts.append(FOOTER)
 
     Path(out_path).write_text("".join(stmts), encoding="utf-8")

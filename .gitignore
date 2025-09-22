@@ -211,3 +211,5 @@ __marimo__/
 *.db
 
 smokerfitbot_list*.xlsx
+
+data/*
