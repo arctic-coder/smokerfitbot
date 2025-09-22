@@ -440,7 +440,7 @@ async def get_all_exercises() -> list[dict]:
 # -------- init all --------
 async def init_db():
     conn = await asyncpg.connect(PG_DSN)
-        await _init_users_pg(conn)
+    await _init_users_pg(conn)
     await _init_subscriptions_pg(conn)
     await _init_payments_pg(conn)
     await _init_exercises_pg(conn)
