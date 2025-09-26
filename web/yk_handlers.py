@@ -1,7 +1,7 @@
 import logging
 from aiohttp import web
-from db.core import get_user_id_by_payment_id
 from billing.service import check_and_activate
+from db import get_user_id_by_payment_id
 
 log = logging.getLogger(__name__)
 # currently only sucseed webhoocs. NEED TO BE CONFIGURED IN YOKASSA SHOP 
