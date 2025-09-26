@@ -6,7 +6,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from keyboards import start_kb
 from texts import (
-    START_MESSAGE, NO_PENDING_PAYMENTS, PAYMENT_CHECK_FAILED,
+    HELP, START_MESSAGE, NO_PENDING_PAYMENTS, PAYMENT_CHECK_FAILED,
     PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
     BTN_RETURN_TO_PAYMENT, BTN_CANCEL_PAYMENT,
 )
@@ -21,6 +21,9 @@ def _payment_pending_kb(payment_id: str, url: str | None) -> InlineKeyboardMarku
         kb.add(InlineKeyboardButton(BTN_RETURN_TO_PAYMENT, url=url))
     kb.add(InlineKeyboardButton(BTN_CANCEL_PAYMENT, callback_data=f"cancelpay:{payment_id}"))
     return kb
+
+async def help_cmd(message: types.Message, state: FSMContext) -> None:
+        await message.answer(HELP, None)
 
 async def start_cmd(message: types.Message, state: FSMContext) -> None:
     """Приветствие и deep-link 'payment_success': /start payment_success"""
@@ -52,3 +55,4 @@ async def start_cmd(message: types.Message, state: FSMContext) -> None:
 
 def register_common_handlers(dp: Dispatcher) -> None:
     dp.register_message_handler(start_cmd, commands="start", state="*")
+    dp.register_message_handler(help_cmd, commands="help", state="*")

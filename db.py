@@ -1,6 +1,5 @@
 import os
 import json
-import aiosqlite
 import asyncpg
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
