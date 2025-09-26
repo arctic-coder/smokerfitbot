@@ -171,3 +171,5 @@ SUBSCRIBE_CREATE = "Оформление подписки: оплатите по
 SUBSCRIBE_RESUME_FAIL = "Не удалось создать/возобновить платёж. Попробуйте позже."
 SUBSCRIBE_YK_REJECT = "ЮKassa отклонила запрос: {desc}"
 SUBSCRIBE_PROMPT = "Оформление подписки."
+
+HELP = "Если что-то сломалось, пишите сюда: @halemaumau"
