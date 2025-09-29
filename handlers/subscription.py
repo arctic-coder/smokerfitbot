@@ -1,8 +1,7 @@
 # handlers/subscription.py
 import os
-import json
 import re
-from typing import Optional, Tuple
+from typing import Optional
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -10,14 +9,14 @@ from aiogram import Dispatcher, types
 from aiogram.dispatcher import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from yookassa.domain.exceptions.bad_request_error import BadRequestError
+from keyboards import kb_payment_pending
 
 from states import Form
 from texts import (
-    HELP, NO_PENDING_PAYMENTS, PAYMENT_CHECK_FAILED, PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
+    PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
     STATUS_NOT_SET, STATUS_LINE, STATUS_PAID_TILL, STATUS_NEXT_CHARGE, STATUS_FOOTER,
-    BTN_OPEN_PAYMENT, BTN_START_SUBSCRIPTION, BTN_RETURN_TO_PAYMENT, BTN_CANCEL_PAYMENT, BTN_CHECK_PAYMENT,
-    EMAIL_PROMPT, EMAIL_INVALID, SUBSCRIBE_CREATE, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUBSCRIBE_PROMPT,
-    SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
+    BTN_OPEN_PAYMENT, BTN_RETURN_TO_PAYMENT, BTN_CANCEL_PAYMENT, BTN_CHECK_PAYMENT,
+    EMAIL_PROMPT, EMAIL_INVALID, SUBSCRIBE_CREATE, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
     CANCEL_NEW_AFTER, BTN_CANCEL_YES, BTN_CANCEL_NO,
 )
 from billing.service import start_or_resume_checkout, check_and_activate, cancel_subscription, is_active
@@ -27,9 +26,36 @@ from db import (
 )
 
 ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))
-
-# --- email helpers ---
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+
+#helper
+async def _start_subscription_flow(reply, user_id: int, state: FSMContext, sub_row) -> None:
+    from billing.service import start_or_resume_checkout, is_active
+    if is_active(sub_row):
+        cpe = sub_row[3] if sub_row else "-"
+        cancelled_note = " (продление отключено)" if sub_row and sub_row[1] == "cancelled" else ""
+        await reply(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
+        return
+
+    data = await state.get_data()
+    sub_email = _extract_email_from_subscription_row(sub_row) or data.get("email")
+    if not _valid_email(sub_email or ""):
+        await state.update_data(next_flow="subscribe")
+        await Form.email.set()
+        await reply(EMAIL_PROMPT)
+        return
+
+    try:
+        payment_id, url = await start_or_resume_checkout(user_id, email=sub_email)
+    except BadRequestError as e:
+        await reply(SUBSCRIBE_YK_REJECT.format(desc=getattr(e, "description", "invalid_request")))
+        return
+    except Exception:
+        await reply(SUBSCRIBE_RESUME_FAIL)
+        return
+
+    kb = kb_payment_pending(payment_id, url)
+    await reply(SUBSCRIBE_CREATE, reply_markup=kb)
 
 def _valid_email(s: str) -> bool:
     return bool(_EMAIL_RE.match((s or "").strip()))
@@ -42,24 +68,7 @@ def _extract_email_from_subscription_row(sub) -> Optional[str]:
             return x
     return None
 
-# --- keyboards ---
-def _subscribe_kb(url: Optional[str] = None) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup()
-    if url:
-        kb.add(InlineKeyboardButton(BTN_OPEN_PAYMENT, url=url))
-    else:
-        kb.add(InlineKeyboardButton(BTN_START_SUBSCRIPTION, callback_data="go_subscribe"))
-    return kb
-
-def _payment_pending_kb(payment_id: str, url: Optional[str]) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup()
-    if url:
-        kb.add(InlineKeyboardButton(BTN_RETURN_TO_PAYMENT, url=url))
-    kb.add(InlineKeyboardButton(BTN_CANCEL_PAYMENT, callback_data=f"cancelpay:{payment_id}"))
-    return kb
-
 # --- commands ---
-
 async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
     """Команда /subscribe — начать или продолжить оплату."""
     user_id = message.from_user.id
@@ -79,19 +88,7 @@ async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
         await message.answer(EMAIL_PROMPT)
         return
 
-    try:
-        payment_id, url = await start_or_resume_checkout(user_id, email=sub_email)
-    except BadRequestError as e:
-        await message.answer(SUBSCRIBE_YK_REJECT.format(desc=getattr(e, "description", "invalid_request")))
-        return
-    except Exception:
-        await message.answer(SUBSCRIBE_RESUME_FAIL)
-        return
-
-    kb = InlineKeyboardMarkup().add(InlineKeyboardButton(BTN_OPEN_PAYMENT, url=url))
-    kb.add(InlineKeyboardButton(BTN_CHECK_PAYMENT, callback_data=f"chkpay:{payment_id}"))
-    kb.add(InlineKeyboardButton(BTN_CANCEL_PAYMENT, callback_data=f"cancelpay:{payment_id}"))
-    await message.answer(SUBSCRIBE_CREATE, reply_markup=kb)
+    await _start_subscription_flow(message.answer, user_id, state, sub)
 
 async def status_cmd(message: types.Message) -> None:
     user_id = message.from_user.id
@@ -114,10 +111,7 @@ async def status_cmd(message: types.Message) -> None:
     pending_id = await get_last_pending_payment_id(user_id)
     if pending_id:
         url = await get_payment_confirmation_url(pending_id)
-        if url:
-            kb.add(InlineKeyboardButton(BTN_RETURN_TO_PAYMENT, url=url))
-        kb.add(InlineKeyboardButton(BTN_CHECK_PAYMENT, callback_data=f"chkpay:{pending_id}"))
-        kb.add(InlineKeyboardButton(BTN_CANCEL_PAYMENT, callback_data=f"cancelpay:{pending_id}"))
+        kb = kb_payment_pending(pending_id, url)
         text_lines.append("\nЕсть незавершённый платёж.")
 
     text_lines.append(STATUS_FOOTER)
@@ -138,7 +132,7 @@ async def check_cmd(message: types.Message) -> None:
         await message.answer(PAYMENT_SUCCEEDED)
     elif result == "pending":
         url = await get_payment_confirmation_url(payment_id)
-        await message.answer(PAYMENT_PENDING, reply_markup=_payment_pending_kb(payment_id, url))
+        await message.answer(PAYMENT_PENDING, reply_markup=kb_payment_pending(payment_id, url))
     else:
         await message.answer(PAYMENT_FAILED)
 
@@ -164,19 +158,7 @@ async def subscribe_cb(call: types.CallbackQuery, state: FSMContext) -> None:
         await call.message.answer(EMAIL_PROMPT)
         return
 
-    try:
-        payment_id, url = await start_or_resume_checkout(user_id, email=sub_email)
-    except BadRequestError as e:
-        await call.message.answer(SUBSCRIBE_YK_REJECT.format(desc=getattr(e, "description", "invalid_request")))
-        return
-    except Exception:
-        await call.message.answer(SUBSCRIBE_RESUME_FAIL)
-        return
-
-    kb = InlineKeyboardMarkup().add(InlineKeyboardButton(BTN_OPEN_PAYMENT, url=url))
-    kb.add(InlineKeyboardButton(BTN_CHECK_PAYMENT, callback_data=f"chkpay:{payment_id}"))
-    kb.add(InlineKeyboardButton(BTN_CANCEL_PAYMENT, callback_data=f"cancelpay:{payment_id}"))
-    await call.message.answer(SUBSCRIBE_CREATE, reply_markup=kb)
+    await _start_subscription_flow(call.message.answer, user_id, state, sub)
 
 async def cancel_payment_cb(call: types.CallbackQuery, state: FSMContext) -> None:
     """Колбэк 'cancelpay:{payment_id}' — пометить отмену и создать новый платёж (если есть e-mail)."""
@@ -201,9 +183,7 @@ async def cancel_payment_cb(call: types.CallbackQuery, state: FSMContext) -> Non
         await call.message.answer(SUBSCRIBE_RESUME_FAIL)
         return
 
-    kb = InlineKeyboardMarkup().add(InlineKeyboardButton(BTN_OPEN_PAYMENT, url=url))
-    kb.add(InlineKeyboardButton(BTN_CHECK_PAYMENT, callback_data=f"chkpay:{new_id}"))
-    await call.message.answer(CANCEL_NEW_AFTER, reply_markup=kb)
+    await call.message.answer(CANCEL_NEW_AFTER, reply_markup=kb_payment_pending(new_id, url))
 
 async def check_payment_cb(call: types.CallbackQuery) -> None:
     """Колбэк 'chkpay:{payment_id}' — проверить конкретный платёж."""
@@ -219,7 +199,7 @@ async def check_payment_cb(call: types.CallbackQuery) -> None:
         await call.message.edit_text(PAYMENT_SUCCEEDED)
     elif result == "pending":
         url = await get_payment_confirmation_url(payment_id)
-        await call.message.answer(PAYMENT_PENDING, reply_markup=_payment_pending_kb(payment_id, url))
+        await call.message.answer(PAYMENT_PENDING, reply_markup=kb_payment_pending(payment_id, url))
     else:
         await call.message.answer(PAYMENT_FAILED)
 

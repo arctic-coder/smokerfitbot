@@ -4,7 +4,7 @@ from aiogram import Dispatcher, types
 from aiogram.dispatcher import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from keyboards import start_kb
+from keyboards import kb_payment_pending, start_kb
 from texts import (
     HELP, START_MESSAGE, NO_PENDING_PAYMENTS, PAYMENT_CHECK_FAILED,
     PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
@@ -15,15 +15,8 @@ from db import get_last_pending_payment_id, get_payment_confirmation_url
 
 ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))
 
-def _payment_pending_kb(payment_id: str, url: str | None) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup()
-    if url:
-        kb.add(InlineKeyboardButton(BTN_RETURN_TO_PAYMENT, url=url))
-    kb.add(InlineKeyboardButton(BTN_CANCEL_PAYMENT, callback_data=f"cancelpay:{payment_id}"))
-    return kb
-
 async def help_cmd(message: types.Message, state: FSMContext) -> None:
-        await message.answer(HELP, None)
+        await message.answer(HELP)
 
 async def start_cmd(message: types.Message, state: FSMContext) -> None:
     """Приветствие и deep-link 'payment_success': /start payment_success"""
@@ -46,7 +39,7 @@ async def start_cmd(message: types.Message, state: FSMContext) -> None:
             await message.answer(PAYMENT_SUCCEEDED)
         elif result == "pending":
             url = await get_payment_confirmation_url(payment_id)
-            await message.answer(PAYMENT_PENDING, reply_markup=_payment_pending_kb(payment_id, url))
+            await message.answer(PAYMENT_PENDING, reply_markup=kb_payment_pending(payment_id, url))
         else:
             await message.answer(PAYMENT_FAILED)
         return

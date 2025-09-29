@@ -1,5 +1,9 @@
-from aiogram.types import ReplyKeyboardMarkup
-from texts import BTN_DONE, BTN_FILL_FORM, BTN_JUNIOR, BTN_MUSCLE_BACK_MORE, BTN_MUSCLE_BELLY_MORE, BTN_MUSCLE_BREAST_MORE, BTN_MUSCLE_CALVES, BTN_MUSCLE_LEGS_MORE, BTN_MUSCLE_SHOULDERS, BTN_MUSCLE_TRICEPC, BTN_NO_NEED, BTN_USE_EXISTING_FORM, LEVELS, EQUIPMENT, LIMITATIONS, DURATION, DURATION_BEGINNER
+from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
+from texts import ( BTN_DONE, BTN_FILL_FORM, BTN_JUNIOR, BTN_MUSCLE_BACK_MORE, 
+BTN_MUSCLE_BELLY_MORE, BTN_MUSCLE_BREAST_MORE, BTN_MUSCLE_CALVES, BTN_MUSCLE_LEGS_MORE, 
+BTN_MUSCLE_SHOULDERS, BTN_MUSCLE_TRICEPC, BTN_NO_NEED, BTN_USE_EXISTING_FORM, LEVELS, 
+EQUIPMENT, LIMITATIONS, DURATION, DURATION_BEGINNER, BTN_OPEN_PAYMENT, BTN_RETURN_TO_PAYMENT, 
+BTN_CHECK_PAYMENT, BTN_CANCEL_PAYMENT, BTN_START_SUBSCRIPTION )
 
 def _mk(rows, one_time: bool = False) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=one_time)
@@ -44,3 +48,19 @@ def extras_kb() -> ReplyKeyboardMarkup:
         [BTN_MUSCLE_BREAST_MORE, BTN_NO_NEED, BTN_DONE],
     ]
     return _mk(rows)
+
+def kb_subscribe(url: str | None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    if url:
+        kb.add(InlineKeyboardButton(BTN_OPEN_PAYMENT, url=url))
+    else:
+        kb.add(InlineKeyboardButton(BTN_START_SUBSCRIPTION, callback_data="go_subscribe"))
+    return kb
+
+def kb_payment_pending(payment_id: str, url: str | None) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    if url:
+        kb.add(InlineKeyboardButton(BTN_RETURN_TO_PAYMENT, url=url))
+    kb.add(InlineKeyboardButton(BTN_CHECK_PAYMENT,  callback_data=f"chkpay:{payment_id}"))
+    kb.add(InlineKeyboardButton(BTN_CANCEL_PAYMENT, callback_data=f"cancelpay:{payment_id}"))
+    return kb
