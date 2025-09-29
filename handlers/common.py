@@ -2,13 +2,11 @@
 import os
 from aiogram import Dispatcher, types
 from aiogram.dispatcher import FSMContext
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from keyboards import kb_payment_pending, start_kb
 from texts import (
     HELP, START_MESSAGE, NO_PENDING_PAYMENTS, PAYMENT_CHECK_FAILED,
     PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
-    BTN_RETURN_TO_PAYMENT, BTN_CANCEL_PAYMENT,
 )
 from billing.service import check_and_activate
 from db import get_last_pending_payment_id, get_payment_confirmation_url

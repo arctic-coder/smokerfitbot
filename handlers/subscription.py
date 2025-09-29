@@ -15,11 +15,10 @@ from states import Form
 from texts import (
     PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
     STATUS_NOT_SET, STATUS_LINE, STATUS_PAID_TILL, STATUS_NEXT_CHARGE, STATUS_FOOTER,
-    BTN_OPEN_PAYMENT, BTN_RETURN_TO_PAYMENT, BTN_CANCEL_PAYMENT, BTN_CHECK_PAYMENT,
-    EMAIL_PROMPT, EMAIL_INVALID, SUBSCRIBE_CREATE, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
+    EMAIL_PROMPT, SUBSCRIBE_CREATE, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
     CANCEL_NEW_AFTER, BTN_CANCEL_YES, BTN_CANCEL_NO,
 )
-from billing.service import start_or_resume_checkout, check_and_activate, cancel_subscription, is_active
+from billing.service import start_or_resume_checkout, check_and_activate, cancel_subscription
 from db import (
     get_subscription, get_last_pending_payment_id, get_payment_confirmation_url,
     upsert_subscription, upsert_payment_status,
@@ -70,25 +69,9 @@ def _extract_email_from_subscription_row(sub) -> Optional[str]:
 
 # --- commands ---
 async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
-    """Команда /subscribe — начать или продолжить оплату."""
     user_id = message.from_user.id
     sub = await get_subscription(user_id)
-    if is_active(sub):
-        cpe = sub[3] if sub else "-"
-        cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
-        await message.answer(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
-        return
-
-    data = await state.get_data()
-    sub_email = _extract_email_from_subscription_row(sub) or data.get("email")
-
-    if not _valid_email(sub_email or ""):
-        await state.update_data(next_flow="subscribe")
-        await Form.email.set()
-        await message.answer(EMAIL_PROMPT)
-        return
-
-    await _start_subscription_flow(message.answer, user_id, state, sub)
+    await _start_subscription_flow(message.answer, user_id, state, sub) 
 
 async def status_cmd(message: types.Message) -> None:
     user_id = message.from_user.id
@@ -139,34 +122,16 @@ async def check_cmd(message: types.Message) -> None:
 # --- callbacks ---
 
 async def subscribe_cb(call: types.CallbackQuery, state: FSMContext) -> None:
-    """Колбэк 'go_subscribe' — начать/продолжить оформление подписки (с e-mail)."""
     await call.answer()
     user_id = call.from_user.id
-
     sub = await get_subscription(user_id)
-    if is_active(sub):
-        cpe = sub[3] if sub else "-"
-        cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
-        await call.message.answer(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
-        return
-
-    data = await state.get_data()
-    sub_email = _extract_email_from_subscription_row(sub) or data.get("email")
-    if not _valid_email(sub_email or ""):
-        await state.update_data(next_flow="go_subscribe")
-        await Form.email.set()
-        await call.message.answer(EMAIL_PROMPT)
-        return
-
     await _start_subscription_flow(call.message.answer, user_id, state, sub)
 
 async def cancel_payment_cb(call: types.CallbackQuery, state: FSMContext) -> None:
-    """Колбэк 'cancelpay:{payment_id}' — пометить отмену и создать новый платёж (если есть e-mail)."""
     await call.answer()
     payment_id = call.data.split(":", 1)[1]
     user_id = call.from_user.id
 
-    # помечаем платёж отменённым у себя
     await upsert_payment_status(user_id, payment_id, 0, "RUB", "canceled", raw_text='{"reason":"user_cancelled"}')
 
     sub = await get_subscription(user_id)
@@ -174,7 +139,8 @@ async def cancel_payment_cb(call: types.CallbackQuery, state: FSMContext) -> Non
     sub_email = _extract_email_from_subscription_row(sub) or data.get("email")
 
     if not _valid_email(sub_email or ""):
-        await call.message.answer("Платёж отменён. Чтобы создать новый, отправьте /subscribe и укажите e-mail для чека.")
+        await Form.email.set()
+        await call.message.answer("Платёж отменён. Введите e-mail, чтобы создать новый платёж:")
         return
 
     try:
@@ -184,6 +150,7 @@ async def cancel_payment_cb(call: types.CallbackQuery, state: FSMContext) -> Non
         return
 
     await call.message.answer(CANCEL_NEW_AFTER, reply_markup=kb_payment_pending(new_id, url))
+
 
 async def check_payment_cb(call: types.CallbackQuery) -> None:
     """Колбэк 'chkpay:{payment_id}' — проверить конкретный платёж."""
@@ -206,17 +173,7 @@ async def check_payment_cb(call: types.CallbackQuery) -> None:
 # --- email state ---
 
 async def process_email_for_subscription(message: types.Message, state: FSMContext):
-    """Пользователь прислал e-mail → сохраняем и создаём/возобновляем платёж."""
-    user_id = message.from_user.id
-    email = (message.text or "").strip()
-
-    if not _valid_email(email):
-        await message.answer(EMAIL_INVALID)
-        return
-
-    await upsert_subscription(user_id, email=email)
-    await state.update_data(email=email)
-
+    ...
     try:
         payment_id, url = await start_or_resume_checkout(user_id, email=email)
     except BadRequestError as e:
@@ -228,10 +185,8 @@ async def process_email_for_subscription(message: types.Message, state: FSMConte
         await message.answer(SUBSCRIBE_RESUME_FAIL)
         return
 
-    kb = InlineKeyboardMarkup().add(InlineKeyboardButton(BTN_OPEN_PAYMENT, url=url))
-    kb.add(InlineKeyboardButton(BTN_CHECK_PAYMENT, callback_data=f"chkpay:{payment_id}"))
-    kb.add(InlineKeyboardButton(BTN_CANCEL_PAYMENT, callback_data=f"cancelpay:{payment_id}"))
-    await message.answer("Отлично! Создал оплату, нажмите кнопку ниже:", reply_markup=kb)
+    await message.answer("Отлично! Создал оплату, нажмите кнопку ниже:",
+                         reply_markup=kb_payment_pending(payment_id, url))
     await state.finish()
 
 # --- cancel subscription command ---
