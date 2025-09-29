@@ -4,14 +4,13 @@ import ast
 from aiogram import Dispatcher, types
 from aiogram.dispatcher import FSMContext
 from aiogram.types import ReplyKeyboardRemove
-from html import escape
 
 from states import Form
 from utils import generate_workout
 from db import get_user, save_user, get_subscription, set_free_workout_used
-from keyboards import level_kb, limitations_kb, equipment_kb, duration_kb_for, extras_kb
+from keyboards import level_kb, limitations_kb, equipment_kb, duration_kb_for, extras_kb, kb_subscribe, kb_choose_plan
 from texts import (
-    BTN_35_45, BTN_EQUIP_NONE, BTN_JUNIOR, BTN_LIMIT_NO, BTN_NO_NEED, BTN_SENIOR, LEVEL_PROMPT, LIMITATIONS_PROMPT, EQUIPMENT_PROMPT, DURATION_PROMPT, EXTRAS_PROMPT,
+    BTN_35_45, BTN_EQUIP_NONE, BTN_JUNIOR, BTN_LIMIT_NO, BTN_NO_NEED, LEVEL_PROMPT, LIMITATIONS_PROMPT, EQUIPMENT_PROMPT, DURATION_PROMPT, EXTRAS_PROMPT,
     INVALID_CHOICE, PROFILE_NOT_FOUND, WORKOUT_STARTING, WORKOUT_EMPTY, WORKOUT_HEADER,
     BTN_FILL_FORM, BTN_USE_EXISTING_FORM, BTN_DONE, SUB_REQUIRED,
     LEVELS, LIMITATIONS, EQUIPMENT, DURATION, DURATION_BEGINNER, EXTRA_MUSCLE_OPTIONS
@@ -159,10 +158,7 @@ async def duration_step(message: types.Message, state: FSMContext) -> None:
         if not free_used:
             await set_free_workout_used(user_id, True)
         else:
-            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-            from texts import BTN_START_SUBSCRIPTION
-            kb = InlineKeyboardMarkup().add(InlineKeyboardButton(BTN_START_SUBSCRIPTION, callback_data="go_subscribe"))
-            await message.answer(SUB_REQUIRED, reply_markup=kb)
+            await message.answer(SUB_REQUIRED, reply_markup=kb_choose_plan())
             return
 
     if message.text == BTN_35_45:
