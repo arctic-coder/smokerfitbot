@@ -2,9 +2,9 @@
 texts.py — все человеко-читаемые строки и подписи на кнопках
 """
 import os
-SUBSCRIPTION_PRICE = int(os.getenv("SUBSCRIPTION_PRICE", "39900"))
+SUBSCRIPTION_PRICE_MONTH = int(os.getenv("SUBSCRIPTION_PRICE_MONTH", "39900"))
 
-amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE / 100)
+amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE_MONTH / 100)
 # --- КНОПКИ ---
 BTN_FILL_FORM = "Заполнить анкету заново"
 BTN_USE_EXISTING_FORM = "Использовать старую анкету"

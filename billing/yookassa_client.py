@@ -8,7 +8,7 @@ from yookassa import Configuration, Payment, Webhook
 from yookassa.domain.exceptions import ApiError
 
 # ==== Константы из окружения ====
-SUBSCRIPTION_PRICE = int(os.getenv("SUBSCRIPTION_PRICE", "39900"))
+SUBSCRIPTION_PRICE_MONTH = int(os.getenv("SUBSCRIPTION_PRICE_MONTH", "39900"))
 SUBSCRIPTION_CURRENCY = os.getenv("SUBSCRIPTION_CURRENCY", "RUB")
 RETURN_URL = os.getenv("RETURN_URL", "https://t.me/")
 SUBSCRIPTION_TITLE = os.getenv("SUBSCRIPTION_TITLE", "Подписка «Физкультура курильщика» (1 месяц)")
@@ -189,7 +189,7 @@ async def create_checkout_payment(user_id: int, email: str | None, description: 
     Создаёт платёж с редиректом (initial checkout) и сохранением способа оплаты.
     Возвращает (payment_id, confirmation_url)
     """
-    amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE / 100)
+    amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE_MONTH / 100)
     payload = {
         "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
         "confirmation": {"type": "redirect", "return_url": RETURN_URL},
@@ -211,7 +211,7 @@ async def create_recurring_payment(payment_method_id: str, user_id: int, email: 
     Рекуррент по сохранённому способу оплаты (без редиректа).
     Возвращает объект Payment.
     """
-    amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE / 100)
+    amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE_MONTH / 100)
     payload = {
         "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
         "payment_method_id": payment_method_id,
