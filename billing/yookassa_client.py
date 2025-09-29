@@ -9,9 +9,11 @@ from yookassa.domain.exceptions import ApiError
 
 # ==== Константы из окружения ====
 SUBSCRIPTION_PRICE_MONTH = int(os.getenv("SUBSCRIPTION_PRICE_MONTH", "39900"))
+SUBSCRIPTION_PRICE_YEAR  = int(os.getenv("SUBSCRIPTION_PRICE_YEAR",  "299000"))
+SUBSCRIPTION_TITLE_MONTH = "Подписка «Физкультура курильщика» (1 месяц)"
+SUBSCRIPTION_TITLE_YEAR  = "Подписка «Физкультура курильщика» (1 год)"
 SUBSCRIPTION_CURRENCY = os.getenv("SUBSCRIPTION_CURRENCY", "RUB")
 RETURN_URL = os.getenv("RETURN_URL", "https://t.me/")
-SUBSCRIPTION_TITLE = os.getenv("SUBSCRIPTION_TITLE", "Подписка «Физкультура курильщика» (1 месяц)")
 
 # Фискальные настройки
 VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))
@@ -24,6 +26,16 @@ log = logging.getLogger("billing.yookassa")
 # ==== Исключение сети ====
 class YookassaNetworkError(Exception):
     pass
+
+def _fmt(cents: int) -> str:
+    return "{:.2f}".format(cents / 100)
+
+def amount_for(plan: str) -> tuple[int, str, str]:
+    if plan == "year":
+        cents, title = SUBSCRIPTION_PRICE_YEAR, SUBSCRIPTION_TITLE_YEAR
+    else:
+        cents, title = SUBSCRIPTION_PRICE_MONTH, SUBSCRIPTION_TITLE_MONTH
+    return cents, _fmt(cents), title
 
 def _log_requests_error(prefix: str, exc: Exception):
     """
@@ -86,7 +98,7 @@ def _ensure_config():
 
 
 # ==== Сборка чека ====
-def _make_receipt(email: str | None, amount_value: str):
+def _make_receipt(email: str | None, amount_value: str, title: str):
     """Минимальный чек: 1 позиция, 1 шт., с НДС VAT_CODE."""
     if not email:
         raise ValueError("Email обязателен для отправки чека")
@@ -94,7 +106,7 @@ def _make_receipt(email: str | None, amount_value: str):
     receipt = {
         "customer": customer,
         "items": [{
-            "description": SUBSCRIPTION_TITLE,
+            "description": title,
             "quantity": "1.00",
             "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
             "vat_code": VAT_CODE,
@@ -184,20 +196,20 @@ async def _payment_find_async(payment_id: str):
         raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
 
 # ==== ВЫСОКОУРОВНЕВЫЕ ОБЁРТКИ ДЛЯ ПРИЛОЖЕНИЯ ====
-async def create_checkout_payment(user_id: int, email: str | None, description: str = SUBSCRIPTION_TITLE):
+async def create_checkout_payment(user_id: int, email: str | None, plan: str):
     """
     Создаёт платёж с редиректом (initial checkout) и сохранением способа оплаты.
     Возвращает (payment_id, confirmation_url)
     """
-    amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE_MONTH / 100)
+    cents, value, title = amount_for(plan)
     payload = {
-        "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
+        "amount": {"value": value, "currency": SUBSCRIPTION_CURRENCY},
         "confirmation": {"type": "redirect", "return_url": RETURN_URL},
         "capture": True,
         "save_payment_method": True,
-        "description": description,
-        "metadata": {"user_id": str(user_id), "origin": "initial"},
-        "receipt": _make_receipt(email, amount_value),
+        "description": title,
+        "metadata": {"user_id": str(user_id), "origin": "initial", "plan": plan},
+        "receipt": _make_receipt(email, value, title),
     }
     idem = str(uuid.uuid4())
     p = await _payment_create_async(payload, idem)
@@ -205,20 +217,19 @@ async def create_checkout_payment(user_id: int, email: str | None, description: 
     url = getattr(conf_obj, "confirmation_url", None) if conf_obj else None
     return p.id, url
 
-async def create_recurring_payment(payment_method_id: str, user_id: int, email: str | None,
-                                   description: str = f"Продление: {SUBSCRIPTION_TITLE}"):
+async def create_recurring_payment(payment_method_id: str, user_id: int, email: str | None, plan: str):
     """
     Рекуррент по сохранённому способу оплаты (без редиректа).
     Возвращает объект Payment.
     """
-    amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE_MONTH / 100)
+    cents, value, title = amount_for(plan)
     payload = {
-        "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
+        "amount": {"value": value, "currency": SUBSCRIPTION_CURRENCY},
         "payment_method_id": payment_method_id,
         "capture": True,
-        "description": description,
-        "metadata": {"user_id": str(user_id), "origin": "recurring"},
-        "receipt": _make_receipt(email=email, amount_value=amount_value),
+        "description": f"Продление: {title}",
+        "metadata": {"user_id": str(user_id), "origin": "recurring", "plan": plan},
+        "receipt": _make_receipt(email, value, title),
     }
     idem = str(uuid.uuid4())
     return await _payment_create_async(payload, idem)

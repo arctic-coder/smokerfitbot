@@ -3,17 +3,25 @@ texts.py — все человеко-читаемые строки и подпи
 """
 import os
 SUBSCRIPTION_PRICE_MONTH = int(os.getenv("SUBSCRIPTION_PRICE_MONTH", "39900"))
+SUBSCRIPTION_PRICE_YEAR = int(os.getenv("SUBSCRIPTION_PRICE_YEAR", "299000"))
 
-amount_value = "{:.2f}".format(SUBSCRIPTION_PRICE_MONTH / 100)
+def _fmt_rub(cents: int) -> str:
+    return "{:.2f}".format(cents / 100)
+
+AMOUNT_MONTH = _fmt_rub(SUBSCRIPTION_PRICE_MONTH)
+AMOUNT_YEAR  = _fmt_rub(SUBSCRIPTION_PRICE_YEAR)
+
+BTN_START_SUB_MONTH = f"Оформить подписку на месяц {AMOUNT_MONTH} ₽"
+BTN_START_SUB_YEAR  = f"Оформить подписку на год {AMOUNT_YEAR} ₽"
+
 # --- КНОПКИ ---
 BTN_FILL_FORM = "Заполнить анкету заново"
 BTN_USE_EXISTING_FORM = "Использовать старую анкету"
 
-BTN_OPEN_PAYMENT = "Перейти к оплате " + amount_value + " ₽"
+BTN_OPEN_PAYMENT = "Перейти к оплате"
 BTN_RETURN_TO_PAYMENT = "Вернуться к оплате"
 BTN_CHECK_PAYMENT = "Проверить оплату"
 BTN_CANCEL_PAYMENT = "Отменить платёж"
-BTN_START_SUBSCRIPTION = "Оформить подписку " + amount_value + " ₽"
 
 BTN_CANCEL_YES = "Да, отменить продление"
 BTN_CANCEL_NO = "Оставить как есть"
@@ -158,7 +166,7 @@ NO_PENDING_PAYMENTS = (
 STATUS_NOT_SET = "Статус: подписка не оформлена. Доступна 1 бесплатная тренировка."
 STATUS_LINE = "Статус подписки: {status}"
 STATUS_PAID_TILL = "Доступ (оплачено) до: {cpe}"
-STATUS_NEXT_CHARGE = "Следующее списание: {nca} (≈ за 1 день до окончания) " + amount_value + " ₽"
+STATUS_NEXT_CHARGE = "Следующее списание: {nca} (≈ за 1 день до окончания) {amount} ₽"
 STATUS_FOOTER = "\nКоманды: /subscribe — оформить, /check — проверить, /cancel — отключить продление"
 
 CANCEL_ASK = "Вы уверены, что хотите отменить продление? Доступ сохранится до {cpe}."

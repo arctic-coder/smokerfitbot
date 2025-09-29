@@ -3,7 +3,7 @@ from texts import ( BTN_DONE, BTN_FILL_FORM, BTN_JUNIOR, BTN_MUSCLE_BACK_MORE,
 BTN_MUSCLE_BELLY_MORE, BTN_MUSCLE_BREAST_MORE, BTN_MUSCLE_CALVES, BTN_MUSCLE_LEGS_MORE, 
 BTN_MUSCLE_SHOULDERS, BTN_MUSCLE_TRICEPC, BTN_NO_NEED, BTN_USE_EXISTING_FORM, LEVELS, 
 EQUIPMENT, LIMITATIONS, DURATION, DURATION_BEGINNER, BTN_OPEN_PAYMENT, BTN_RETURN_TO_PAYMENT, 
-BTN_CHECK_PAYMENT, BTN_CANCEL_PAYMENT, BTN_START_SUBSCRIPTION )
+BTN_CHECK_PAYMENT, BTN_CANCEL_PAYMENT, BTN_START_SUB_MONTH, BTN_START_SUB_YEAR)
 
 def _mk(rows, one_time: bool = False) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=one_time)
@@ -33,6 +33,12 @@ equipment_kb = _mk([
     EQUIPMENT[9:] + [BTN_DONE],
 ])
 
+def kb_choose_plan() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton(BTN_START_SUB_MONTH, callback_data="go_subscribe:month"))
+    kb.add(InlineKeyboardButton(BTN_START_SUB_YEAR,  callback_data="go_subscribe:year"))
+    return kb
+
 # длительность
 def duration_kb_for(level: str) -> ReplyKeyboardMarkup:
     if level == BTN_JUNIOR:
@@ -50,12 +56,11 @@ def extras_kb() -> ReplyKeyboardMarkup:
     return _mk(rows)
 
 def kb_subscribe(url: str | None) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup()
     if url:
+        kb = InlineKeyboardMarkup()
         kb.add(InlineKeyboardButton(BTN_OPEN_PAYMENT, url=url))
-    else:
-        kb.add(InlineKeyboardButton(BTN_START_SUBSCRIPTION, callback_data="go_subscribe"))
-    return kb
+        return kb
+    return kb_choose_plan()
 
 def kb_payment_pending(payment_id: str, url: str | None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()

@@ -9,11 +9,12 @@ from aiogram import Dispatcher, types
 from aiogram.dispatcher import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from yookassa.domain.exceptions.bad_request_error import BadRequestError
-from keyboards import kb_payment_pending
+from billing.yookassa_client import amount_for, get_payment
+from keyboards import kb_payment_pending, kb_choose_plan
 
 from states import Form
 from texts import (
-    PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
+    EMAIL_INVALID, PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
     STATUS_NOT_SET, STATUS_LINE, STATUS_PAID_TILL, STATUS_NEXT_CHARGE, STATUS_FOOTER,
     EMAIL_PROMPT, SUBSCRIBE_CREATE, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
     CANCEL_NEW_AFTER, BTN_CANCEL_YES, BTN_CANCEL_NO,
@@ -39,13 +40,14 @@ async def _start_subscription_flow(reply, user_id: int, state: FSMContext, sub_r
     data = await state.get_data()
     sub_email = _extract_email_from_subscription_row(sub_row) or data.get("email")
     if not _valid_email(sub_email or ""):
-        await state.update_data(next_flow="subscribe")
         await Form.email.set()
         await reply(EMAIL_PROMPT)
         return
 
     try:
-        payment_id, url = await start_or_resume_checkout(user_id, email=sub_email)
+        data = await state.get_data()
+        plan = data.get("plan") or "month"
+        payment_id, url = await start_or_resume_checkout(user_id, email=sub_email, plan=plan)
     except BadRequestError as e:
         await reply(SUBSCRIBE_YK_REJECT.format(desc=getattr(e, "description", "invalid_request")))
         return
@@ -69,9 +71,8 @@ def _extract_email_from_subscription_row(sub) -> Optional[str]:
 
 # --- commands ---
 async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
-    user_id = message.from_user.id
-    sub = await get_subscription(user_id)
-    await _start_subscription_flow(message.answer, user_id, state, sub) 
+    await state.update_data(plan=None)
+    await message.answer("Выберите вариант подписки:", reply_markup=kb_choose_plan())
 
 async def status_cmd(message: types.Message) -> None:
     user_id = message.from_user.id
@@ -86,10 +87,12 @@ async def status_cmd(message: types.Message) -> None:
         status = sub[1]
         cpe = sub[3] or "-"
         nca = sub[4] or "-"
+        plan = (sub[10] if len(sub) > 10 else None) or "month"
         text_lines.append(STATUS_LINE.format(status=status))
         text_lines.append(STATUS_PAID_TILL.format(cpe=cpe))
         if status == "active":
-            text_lines.append(STATUS_NEXT_CHARGE.format(nca=nca))
+            _, amount_value, _ = amount_for(plan)
+            text_lines.append(STATUS_NEXT_CHARGE.format(nca=nca, amount=amount_value))
 
     pending_id = await get_last_pending_payment_id(user_id)
     if pending_id:
@@ -123,6 +126,9 @@ async def check_cmd(message: types.Message) -> None:
 
 async def subscribe_cb(call: types.CallbackQuery, state: FSMContext) -> None:
     await call.answer()
+    parts = (call.data or "").split(":", 1)
+    plan = parts[1] if len(parts) == 2 else "month"
+    await state.update_data(plan=plan)
     user_id = call.from_user.id
     sub = await get_subscription(user_id)
     await _start_subscription_flow(call.message.answer, user_id, state, sub)
@@ -138,17 +144,25 @@ async def cancel_payment_cb(call: types.CallbackQuery, state: FSMContext) -> Non
     data = await state.get_data()
     sub_email = _extract_email_from_subscription_row(sub) or data.get("email")
 
+    try:
+        p = await get_payment(payment_id)
+        md = getattr(p, "metadata", None)
+        plan = md.get("plan") if md else None
+    except Exception:
+        plan = None
+
     if not _valid_email(sub_email or ""):
         await Form.email.set()
+        await state.update_data(plan=plan or "month")
         await call.message.answer("Платёж отменён. Введите e-mail, чтобы создать новый платёж:")
         return
-
-    try:
-        new_id, url = await start_or_resume_checkout(user_id, email=sub_email)
-    except Exception:
-        await call.message.answer(SUBSCRIBE_RESUME_FAIL)
+    
+    if not plan:
+        await state.update_data(plan=None)
+        await call.message.answer("Выберите вариант подписки:", reply_markup=kb_choose_plan())
         return
 
+    new_id, url = await start_or_resume_checkout(user_id, email=sub_email, plan=plan)
     await call.message.answer(CANCEL_NEW_AFTER, reply_markup=kb_payment_pending(new_id, url))
 
 
@@ -173,9 +187,20 @@ async def check_payment_cb(call: types.CallbackQuery) -> None:
 # --- email state ---
 
 async def process_email_for_subscription(message: types.Message, state: FSMContext):
-    ...
+    """Пользователь прислал e-mail → сохраняем и создаём/возобновляем платёж."""
+    user_id = message.from_user.id
+    email = (message.text or "").strip()
+
+    if not _valid_email(email):
+        await message.answer(EMAIL_INVALID)
+        return
+
+    await upsert_subscription(user_id, email=email)
+    await state.update_data(email=email)
     try:
-        payment_id, url = await start_or_resume_checkout(user_id, email=email)
+        data = await state.get_data()
+        plan = data.get("plan") or "month"
+        payment_id, url = await start_or_resume_checkout(user_id, email=email, plan=plan)
     except BadRequestError as e:
         await state.finish()
         await message.answer(SUBSCRIBE_YK_REJECT.format(desc=getattr(e, "description", "invalid_request")))
@@ -277,7 +302,7 @@ def register_subscription_handlers(dp: Dispatcher) -> None:
     dp.register_message_handler(process_email_for_subscription, state=Form.email)
 
     # колбэки
-    dp.register_callback_query_handler(subscribe_cb, lambda c: c.data == "go_subscribe", state="*")
+    dp.register_callback_query_handler(subscribe_cb, lambda c: (c.data or "").startswith("go_subscribe"), state="*")
     dp.register_callback_query_handler(cancel_payment_cb, lambda c: c.data.startswith("cancelpay:"), state="*")
     dp.register_callback_query_handler(check_payment_cb, lambda c: c.data.startswith("chkpay:"), state="*")
     dp.register_callback_query_handler(cancel_yes_cb, lambda c: c.data == "cancel_yes", state="*")

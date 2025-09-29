@@ -1,11 +1,17 @@
 from datetime import datetime, timedelta, timezone
 from db import (
     upsert_subscription, upsert_payment_status, get_last_pending_payment_id,
-    get_payment_confirmation_url, get_subscription, insert_payment, mark_payment_applied, cancel_other_pendings 
+    get_payment_confirmation_url, get_subscription, mark_payment_applied, cancel_other_pendings 
 )
 from billing.yookassa_client import create_checkout_payment, get_payment, create_recurring_payment
 import logging
 log = logging.getLogger("billing.service")
+
+def _add_months(dt: datetime, n: int) -> datetime:
+    cur = dt
+    for _ in range(n):
+        cur = _next_month(cur) 
+    return cur
 
 def _next_month(dt: datetime) -> datetime:
     month = dt.month + 1
@@ -29,7 +35,7 @@ def _extract_email_from_subscription_row(sub) -> str | None:
     return None
 
 
-def _calc_renewal_dates(current_period_end, now_utc: datetime):
+def _calc_renewal_dates(current_period_end, now_utc: datetime, months: int):
     """
     Возвращает (new_cpe, next_charge_at):
     - если текущий период ещё активен, считаем от current_period_end;
@@ -52,7 +58,7 @@ def _calc_renewal_dates(current_period_end, now_utc: datetime):
             cpe_dt = cpe_dt.astimezone(timezone.utc)
 
     anchor = cpe_dt if (cpe_dt and cpe_dt > now_utc) else now_utc
-    new_cpe = _next_month(anchor)
+    new_cpe = _add_months(anchor, months)
     next_charge_at = new_cpe - timedelta(days=1)
     return new_cpe, next_charge_at
 
@@ -81,37 +87,36 @@ async def check_and_activate(user_id: int, payment_id: str):
 
     # 2) Ветвление по статусу
     if p.status == "succeeded":
-        # 2.1) idempotency: применяем платёж только один раз
         first_time = await mark_payment_applied(payment_id)
         if not first_time:
-            # уже применяли раньше — ничего не продлеваем, но сообщаем успех
             return "succeeded"
 
-        # 2.2) сохраним ИД способа оплаты (если он сохранён)
-        pm_id = None
+        plan = None
         try:
-            if p.payment_method and getattr(p.payment_method, "saved", False):
-                pm_id = p.payment_method.id
+            md = getattr(p, "metadata", None)
+            plan = md.get("plan") if md else None
         except Exception:
-            pm_id = None
+            pass
+        if plan not in ("month", "year"):
+            plan = "month"
 
-        # 2.3) посчитаем корректные даты продления
         sub = await get_subscription(user_id)
         old_cpe = sub[3] if sub else None
         now = datetime.now(timezone.utc)
-        new_cpe, next_charge_at = _calc_renewal_dates(old_cpe, now)
+        months = 12 if plan == "year" else 1
+        new_cpe, next_charge_at = _calc_renewal_dates(old_cpe, now, months)
 
-        # 2.4) продлеваем
         await upsert_subscription(
             user_id,
             status="active",
-            payment_method_id=pm_id or (sub[2] if sub else None),
+            payment_method_id=(p.payment_method.id if getattr(getattr(p, "payment_method", None), "saved", False) else (sub[2] if sub else None)),
             current_period_end=new_cpe,
             next_charge_at=next_charge_at,
-            amount=amount_int,
-            currency=p.amount.currency
+            amount=int(round(float(p.amount.value) * 100)),
+            currency=p.amount.currency,
+            plan=plan,
         )
-        await cancel_other_pendings(user_id, keep_payment_id=payment_id) 
+        await cancel_other_pendings(user_id, keep_payment_id=payment_id)
         return "succeeded"
 
     if p.status in ("pending", "waiting_for_capture"):
@@ -155,20 +160,20 @@ def is_active(sub_row) -> bool:
     return status in ("active", "cancelled") and cpe_dt > datetime.now(timezone.utc)
 
 
-async def start_or_resume_checkout(user_id: int, email: str | None):
-    """
-    Если есть pending — вернём ссылку на оплату для существующего платежа (из API или из БД).
-    Если нет — создадим новый платеж.
-    """
-    last_pending = await get_last_pending_payment_id(user_id)
-    if last_pending:
-        p = await get_payment(last_pending)
+async def start_or_resume_checkout(user_id: int, email: str | None, plan: str):
+    last_pending_id = await get_last_pending_payment_id(user_id)
+    if last_pending_id:
+        p = await get_payment(last_pending_id)
         if p and p.status in ("pending", "waiting_for_capture"):
-            url = _get_confirmation_url(p) or await get_payment_confirmation_url(last_pending)
-            if url:
-                return last_pending, url
+            md = getattr(p, "metadata", None)
+            p_plan = (md.get("plan") if md else None) or "month"
+            if p_plan == plan:
+                url = _get_confirmation_url(p) or await get_payment_confirmation_url(last_pending_id)
+                if url:
+                    return last_pending_id, url
+            # если план отличается — не переиспользуем тот pending
 
-    payment_id, url = await create_checkout_payment(user_id, email)
+    payment_id, url = await create_checkout_payment(user_id, email, plan)
     await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}", confirmation_url=url)
     return payment_id, url
 
@@ -218,12 +223,10 @@ async def charge_recurring(user_id: int):
             return "pending"
 
     # Создаём рекуррентный платёж (передаём email!)
-    payment = await create_recurring_payment(
-        payment_method_id=pmid,
-        user_id=user_id,
-        email=sub_email,
-        description="Продление подписки на 1 месяц"
-    )
+    plan = (sub[10] if len(sub) > 10 else None) or "month"
+    months = 12 if plan == "year" else 1
+    payment = await create_recurring_payment(pmid, user_id, sub_email, plan)
+
 
     amount_int = int(round(float(payment.amount.value) * 100))
     await upsert_payment_status(
@@ -238,14 +241,15 @@ async def charge_recurring(user_id: int):
             return "succeeded"
 
         # продлеваем на месяц (от cpe, если он в будущем; иначе от now)
-        new_cpe, next_charge_at = _calc_renewal_dates(cpe, now)
+        new_cpe, next_charge_at = _calc_renewal_dates(cpe, now, months)
         await upsert_subscription(
             user_id,
             status="active",
             current_period_end=new_cpe,
             next_charge_at=next_charge_at,
-            amount=amount_int,
-            currency=payment.amount.currency
+            amount=int(round(float(payment.amount.value) * 100)),
+            currency=payment.amount.currency,
+            plan=plan,
         )
 
         # удаляем прочие "висящие" pending этого пользователя

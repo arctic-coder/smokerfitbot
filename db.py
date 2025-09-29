@@ -109,7 +109,8 @@ async def _init_subscriptions_pg(conn):
             next_charge_at TIMESTAMP,
             amount INTEGER,
             currency TEXT,
-            email TEXT,           
+            email TEXT, 
+            plan TEXT NOT NULL DEFAULT 'month',
             created_at TIMESTAMP,
             updated_at TIMESTAMP
         )
@@ -132,28 +133,47 @@ async def upsert_subscription(user_id: int, **fields):
     """
     now = _now_iso()
 
+    def _norm_plan(v):
+        if not v:
+            return None
+        v = str(v).strip().lower()
+        return v if v in ("month", "year") else None
+
     def _sanitize(existing_row, incoming: dict):
         if not existing_row:
+            plan = _norm_plan(incoming.get("plan"))
+            if plan is None and "plan" in incoming:
+                incoming.pop("plan", None)
             return incoming
 
         old_status = existing_row["status"]
         old_cpe    = existing_row["current_period_end"]
+        old_plan   = (existing_row.get("plan") if isinstance(existing_row, dict) else None) or "month"
 
         old_cpe_dt = _parse_iso(old_cpe)
         now_dt = datetime.now(timezone.utc)
 
         new = dict(incoming)
 
+        if "plan" in new:
+            np = _norm_plan(new["plan"])
+            if np is None:
+                new.pop("plan", None)
+            else:
+                new["plan"] = np
+
         if old_status == "active" and old_cpe_dt and old_cpe_dt > now_dt:
-            # Разрешаем отмену продления (cancelled), но не даём даунгрейдить в trial/past_due
+            # статус: не понижаем
             if new.get("status") and new["status"] not in ("active", "cancelled"):
                 new.pop("status", None)
-            # Не укорачиваем период
+            # период: не укорачиваем
             if "current_period_end" in new:
                 new_cpe_dt = _parse_iso(new["current_period_end"])
                 if new_cpe_dt and new_cpe_dt <= old_cpe_dt:
                     new.pop("current_period_end", None)
-
+            # plan: не меняем на лету
+            if "plan" in new and new["plan"] != old_plan:
+                new.pop("plan", None)
 
         return new
 
@@ -161,11 +181,10 @@ async def upsert_subscription(user_id: int, **fields):
     row = await conn.fetchrow("SELECT * FROM subscriptions WHERE user_id = $1", user_id)
     fields = _sanitize(row, fields)
 
-    # нормализуем типы дат для PG (TIMESTAMP): ожидается datetime, не строка
+    # нормализуем TIMESTAMP-поля
     for k in ("current_period_end", "next_charge_at"):
         if k in fields:
             fields[k] = _to_pg_timestamp(fields[k])
-
 
     cols = list(fields.keys())
     vals = list(fields.values())
@@ -185,11 +204,13 @@ async def get_subscription(user_id: int):
     if row:
         return (
             row["user_id"], row["status"], row["payment_method_id"],
-        row["current_period_end"], row["next_charge_at"],
-        row["amount"], row["currency"], row["email"], 
-        row["created_at"], row["updated_at"]
+            row["current_period_end"], row["next_charge_at"],
+            row["amount"], row["currency"], row["email"],
+            row["created_at"], row["updated_at"],
+            row["plan"],  
         )
     return None
+
 
 async def _init_payments_pg(conn):
     await conn.execute("""
