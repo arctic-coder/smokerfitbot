@@ -18,8 +18,7 @@ BTN_START_SUB_YEAR  = f"Оформить подписку на год {AMOUNT_YE
 BTN_FILL_FORM = "Заполнить анкету заново"
 BTN_USE_EXISTING_FORM = "Использовать старую анкету"
 
-BTN_OPEN_PAYMENT = "Перейти к оплате"
-BTN_RETURN_TO_PAYMENT = "Вернуться к оплате"
+BTN_RETURN_TO_PAYMENT = "Перейти к оплате"
 BTN_CHECK_PAYMENT = "Проверить оплату"
 BTN_CANCEL_PAYMENT = "Отменить платёж"
 
