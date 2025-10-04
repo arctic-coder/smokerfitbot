@@ -16,7 +16,7 @@ from states import Form
 from texts import (
     EMAIL_INVALID, PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
     STATUS_NOT_SET, STATUS_LINE, STATUS_PAID_TILL, STATUS_NEXT_CHARGE, STATUS_FOOTER,
-    EMAIL_PROMPT, SUBSCRIBE_CREATE, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
+    EMAIL_PROMPT, SUBSCRIBE_CREATE, SUBSCRIBE_FROM_COMMAND, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
     CANCEL_NEW_AFTER, BTN_CANCEL_YES, BTN_CANCEL_NO,
 )
 from billing.service import start_or_resume_checkout, check_and_activate, cancel_subscription
@@ -72,7 +72,7 @@ def _extract_email_from_subscription_row(sub) -> Optional[str]:
 # --- commands ---
 async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
     await state.update_data(plan=None)
-    await message.answer("Выберите вариант подписки:", reply_markup=kb_choose_plan())
+    await message.answer(SUBSCRIBE_FROM_COMMAND, reply_markup=kb_choose_plan())
 
 async def status_cmd(message: types.Message) -> None:
     user_id = message.from_user.id
