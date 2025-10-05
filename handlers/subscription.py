@@ -36,7 +36,7 @@ def _date_only(dt: datetime | None) -> str:
 
 async def _start_subscription_flow(reply, user_id: int, state: FSMContext, sub_row) -> None:
     if is_active(sub_row):
-        cpe = sub_row[3] if sub_row else "-"
+        cpe = _date_only(sub_row[3] if sub_row else None)
         cancelled_note = " (продление отключено)" if sub_row and sub_row[1] == "cancelled" else ""
         await reply(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
         return
@@ -81,7 +81,7 @@ async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
         await state.update_data(plan=None)
         await message.answer(SUBSCRIBE_FROM_COMMAND, reply_markup=kb_choose_plan())
     else: #already active subscription
-        cpe = sub[3] if sub else "-"
+        cpe = _date_only(sub[3] if sub else None)
         cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
         await message.answer(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
         return
@@ -236,7 +236,8 @@ async def cancel_cmd(message: types.Message):
         await message.answer(CANCEL_NONE)
         return
 
-    status, cpe = sub[1], sub[3]
+    status = sub[1]
+    cpe = _date_only(sub[3] if sub else None)
     if not cpe:
         await message.answer(CANCEL_NOT_ACTIVE)
         return
