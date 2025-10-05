@@ -11,6 +11,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from yookassa.domain.exceptions.bad_request_error import BadRequestError
 from billing.yookassa_client import amount_for, get_payment
 from keyboards import kb_payment_pending, kb_choose_plan
+from billing.service import start_or_resume_checkout, is_active
 
 from states import Form
 from texts import (
@@ -30,7 +31,6 @@ _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
 #helper
 async def _start_subscription_flow(reply, user_id: int, state: FSMContext, sub_row) -> None:
-    from billing.service import start_or_resume_checkout, is_active
     if is_active(sub_row):
         cpe = sub_row[3] if sub_row else "-"
         cancelled_note = " (продление отключено)" if sub_row and sub_row[1] == "cancelled" else ""
@@ -71,8 +71,18 @@ def _extract_email_from_subscription_row(sub) -> Optional[str]:
 
 # --- commands ---
 async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
-    await state.update_data(plan=None)
-    await message.answer(SUBSCRIBE_FROM_COMMAND, reply_markup=kb_choose_plan())
+    user_id = message.from_user.id
+    sub = await get_subscription(user_id)
+    if not is_active(sub):
+        await state.update_data(plan=None)
+        await message.answer(SUBSCRIBE_FROM_COMMAND, reply_markup=kb_choose_plan())
+    else: #already active subscription
+        cpe = sub[3] if sub else "-"
+        cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
+        await message.asnwer(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
+        return
+
+        
 
 async def status_cmd(message: types.Message) -> None:
     user_id = message.from_user.id
