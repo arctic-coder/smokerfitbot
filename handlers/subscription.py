@@ -30,6 +30,10 @@ ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
 #helper
+
+def _date_only(dt: datetime | None) -> str:
+    return dt.strftime("%Y-%m-%d") if dt else "-"
+
 async def _start_subscription_flow(reply, user_id: int, state: FSMContext, sub_row) -> None:
     if is_active(sub_row):
         cpe = sub_row[3] if sub_row else "-"
@@ -95,8 +99,8 @@ async def status_cmd(message: types.Message) -> None:
         text_lines.append(STATUS_NOT_SET)
     else:
         status = sub[1]
-        cpe = sub[3] or "-"
-        nca = sub[4] or "-"
+        cpe = _date_only(sub[3] if sub else None)
+        nca = _date_only(sub[4] if sub else None)
         plan = (sub[10] if len(sub) > 10 else None) or "month"
         text_lines.append(STATUS_LINE.format(status=status))
         text_lines.append(STATUS_PAID_TILL.format(cpe=cpe))
