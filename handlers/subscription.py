@@ -79,7 +79,7 @@ async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
     else: #already active subscription
         cpe = sub[3] if sub else "-"
         cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
-        await message.asnwer(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
+        await message.answer(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
         return
 
         
