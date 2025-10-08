@@ -8,7 +8,7 @@ from aiogram.types import ReplyKeyboardRemove
 from states import Form
 from utils import generate_workout
 from db import get_user, save_user, get_subscription, set_free_workout_used
-from keyboards import level_kb, limitations_kb, equipment_kb, duration_kb_for, extras_kb, kb_subscribe, kb_choose_plan
+from keyboards import level_kb, limitations_kb, equipment_kb, duration_kb_for, extras_kb, kb_choose_plan
 from texts import (
     BTN_35_45, BTN_EQUIP_NONE, BTN_JUNIOR, BTN_LIMIT_NO, BTN_NO_NEED, LEVEL_PROMPT, LIMITATIONS_PROMPT, EQUIPMENT_PROMPT, DURATION_PROMPT, EXTRAS_PROMPT,
     INVALID_CHOICE, PROFILE_NOT_FOUND, WORKOUT_STARTING, WORKOUT_EMPTY, WORKOUT_HEADER,

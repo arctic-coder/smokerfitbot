@@ -11,12 +11,13 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from yookassa.domain.exceptions.bad_request_error import BadRequestError
 from billing.yookassa_client import amount_for, get_payment
 from keyboards import kb_payment_pending, kb_choose_plan
+from billing.service import start_or_resume_checkout, is_active
 
 from states import Form
 from texts import (
     EMAIL_INVALID, PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
     STATUS_NOT_SET, STATUS_LINE, STATUS_PAID_TILL, STATUS_NEXT_CHARGE, STATUS_FOOTER,
-    EMAIL_PROMPT, SUBSCRIBE_CREATE, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
+    EMAIL_PROMPT, SUBSCRIBE_CREATE, SUBSCRIBE_FROM_COMMAND, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
     CANCEL_NEW_AFTER, BTN_CANCEL_YES, BTN_CANCEL_NO,
 )
 from billing.service import start_or_resume_checkout, check_and_activate, cancel_subscription
@@ -29,10 +30,13 @@ ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 
 #helper
+
+def _date_only(dt: datetime | None) -> str:
+    return dt.strftime("%Y-%m-%d") if dt else "-"
+
 async def _start_subscription_flow(reply, user_id: int, state: FSMContext, sub_row) -> None:
-    from billing.service import start_or_resume_checkout, is_active
     if is_active(sub_row):
-        cpe = sub_row[3] if sub_row else "-"
+        cpe = _date_only(sub_row[3] if sub_row else None)
         cancelled_note = " (продление отключено)" if sub_row and sub_row[1] == "cancelled" else ""
         await reply(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
         return
@@ -71,8 +75,18 @@ def _extract_email_from_subscription_row(sub) -> Optional[str]:
 
 # --- commands ---
 async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
-    await state.update_data(plan=None)
-    await message.answer("Выберите вариант подписки:", reply_markup=kb_choose_plan())
+    user_id = message.from_user.id
+    sub = await get_subscription(user_id)
+    if not is_active(sub):
+        await state.update_data(plan=None)
+        await message.answer(SUBSCRIBE_FROM_COMMAND, reply_markup=kb_choose_plan())
+    else: #already active subscription
+        cpe = _date_only(sub[3] if sub else None)
+        cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
+        await message.answer(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
+        return
+
+        
 
 async def status_cmd(message: types.Message) -> None:
     user_id = message.from_user.id
@@ -85,8 +99,8 @@ async def status_cmd(message: types.Message) -> None:
         text_lines.append(STATUS_NOT_SET)
     else:
         status = sub[1]
-        cpe = sub[3] or "-"
-        nca = sub[4] or "-"
+        cpe = _date_only(sub[3] if sub else None)
+        nca = _date_only(sub[4] if sub else None)
         plan = (sub[10] if len(sub) > 10 else None) or "month"
         text_lines.append(STATUS_LINE.format(status=status))
         text_lines.append(STATUS_PAID_TILL.format(cpe=cpe))
@@ -222,7 +236,8 @@ async def cancel_cmd(message: types.Message):
         await message.answer(CANCEL_NONE)
         return
 
-    status, cpe = sub[1], sub[3]
+    status = sub[1]
+    cpe = _date_only(sub[3] if sub else None)
     if not cpe:
         await message.answer(CANCEL_NOT_ACTIVE)
         return
