@@ -94,7 +94,7 @@ async def limitations_step(message: types.Message, state: FSMContext) -> None:
     if message.text == BTN_DONE:
         await state.update_data(limitations=current, equipment=[])
         await Form.equipment.set()
-        await message.answer(EQUIPMENT_PROMPT, reply_markup=equipment_kb)
+        await message.answer(EQUIPMENT_PROMPT, parse_mode="HTML", disable_web_page_preview=True, reply_markup=equipment_kb)
         return
 
     if message.text not in LIMITATIONS_SET:
