@@ -19,7 +19,7 @@ from texts import (
     EMAIL_INVALID, PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
     STATUS_NOT_SET, STATUS_LINE, STATUS_PAID_TILL, STATUS_NEXT_CHARGE, STATUS_FOOTER,
     EMAIL_PROMPT, SUBSCRIBE_CREATE, SUBSCRIBE_FROM_COMMAND, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
-    CANCEL_NEW_AFTER, BTN_CANCEL_YES, BTN_CANCEL_NO,
+    CANCEL_CURRENT, BTN_CANCEL_YES, BTN_CANCEL_NO,
 )
 from billing.service import start_or_resume_checkout, check_and_activate, cancel_subscription
 from db import (
@@ -149,36 +149,16 @@ async def subscribe_cb(call: types.CallbackQuery, state: FSMContext) -> None:
     await _start_subscription_flow(call.message.answer, user_id, state, sub)
 
 async def cancel_payment_cb(call: types.CallbackQuery, state: FSMContext) -> None:
+    #после отмены текущего платежа пользователь получает сообщение «Платёж отменён.» и сразу попадает в начальную точку анкеты
     await call.answer()
     payment_id = call.data.split(":", 1)[1]
     user_id = call.from_user.id
 
     await upsert_payment_status(user_id, payment_id, 0, "RUB", "canceled", raw_text='{"reason":"user_cancelled"}')
 
-    sub = await get_subscription(user_id)
-    data = await state.get_data()
-    sub_email = _extract_email_from_subscription_row(sub) or data.get("email")
-
-    try:
-        p = await get_payment(payment_id)
-        md = getattr(p, "metadata", None)
-        plan = md.get("plan") if md else None
-    except Exception:
-        plan = None
-
-    if not _valid_email(sub_email or ""):
-        await Form.email.set()
-        await state.update_data(plan=plan or "month")
-        await call.message.answer("Платёж отменён. Введите e-mail, чтобы создать новый платёж:")
-        return
-    
-    if not plan:
-        await state.update_data(plan=None)
-        await call.message.answer("Выберите вариант подписки:", reply_markup=kb_choose_plan())
-        return
-
-    new_id, url = await start_or_resume_checkout(user_id, email=sub_email, plan=plan)
-    await call.message.answer(CANCEL_NEW_AFTER, reply_markup=kb_payment_pending(new_id, url))
+    # информируем пользователя и возвращаем в начало бота
+    await call.message.answer(CANCEL_CURRENT)
+    await start_cmd(call.message, state)
 
 
 async def check_payment_cb(call: types.CallbackQuery, state: FSMContext) -> None:
