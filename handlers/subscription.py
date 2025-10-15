@@ -118,25 +118,6 @@ async def status_cmd(message: types.Message) -> None:
     text_lines.append(STATUS_FOOTER)
     await message.answer("\n".join(text_lines), reply_markup=kb if kb.inline_keyboard else None)
 
-async def check_cmd(message: types.Message) -> None:
-    payment_id = await get_last_pending_payment_id(message.from_user.id)
-    if not payment_id:
-        await message.answer("Нет платежей, ожидающих подтверждения. Используйте /subscribe, чтобы оформить подписку.")
-        return
-    try:
-        result = await check_and_activate(message.from_user.id, payment_id)
-    except BadRequestError as e:
-        await message.answer(SUBSCRIBE_YK_REJECT.format(desc=getattr(e, "description", "invalid_request")))
-        return
-
-    if result == "succeeded":
-        await message.answer(PAYMENT_SUCCEEDED)
-    elif result == "pending":
-        url = await get_payment_confirmation_url(payment_id)
-        await message.answer(PAYMENT_PENDING, reply_markup=kb_payment_pending(payment_id, url))
-    else:
-        await message.answer(PAYMENT_FAILED)
-
 # --- callbacks ---
 
 async def subscribe_cb(call: types.CallbackQuery, state: FSMContext) -> None:
@@ -298,7 +279,6 @@ def register_subscription_handlers(dp: Dispatcher) -> None:
     # команды
     dp.register_message_handler(subscribe_cmd, commands="subscribe", state="*")
     dp.register_message_handler(status_cmd, commands="status", state="*")
-    dp.register_message_handler(check_cmd, commands="check", state="*")
     dp.register_message_handler(cancel_cmd, commands="cancel", state="*")
     dp.register_message_handler(process_email_for_subscription, state=Form.email)
 
