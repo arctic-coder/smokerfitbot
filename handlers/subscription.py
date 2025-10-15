@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Dispatcher, types
 from aiogram.dispatcher import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from handlers.common import start_cmd
 from yookassa.domain.exceptions.bad_request_error import BadRequestError
 from billing.yookassa_client import amount_for, get_payment
 from keyboards import kb_payment_pending, kb_choose_plan
@@ -180,8 +181,9 @@ async def cancel_payment_cb(call: types.CallbackQuery, state: FSMContext) -> Non
     await call.message.answer(CANCEL_NEW_AFTER, reply_markup=kb_payment_pending(new_id, url))
 
 
-async def check_payment_cb(call: types.CallbackQuery) -> None:
+async def check_payment_cb(call: types.CallbackQuery, state: FSMContext) -> None:
     """Колбэк 'chkpay:{payment_id}' — проверить конкретный платёж."""
+    # После проверки платежа возвращаем пользователя в начало бота
     await call.answer()
     payment_id = call.data.split(":", 1)[1]
     try:
@@ -190,13 +192,17 @@ async def check_payment_cb(call: types.CallbackQuery) -> None:
         await call.message.answer(SUBSCRIBE_YK_REJECT.format(desc=getattr(e, "description", "invalid_request")))
         return
 
-    if result == "succeeded":
+    if result == "succeeded": 
+        # успех: редактируем исходное сообщение и возвращаемся к старту
         await call.message.edit_text(PAYMENT_SUCCEEDED)
+        await start_cmd(call.message, state)
     elif result == "pending":
         url = await get_payment_confirmation_url(payment_id)
         await call.message.answer(PAYMENT_PENDING, reply_markup=kb_payment_pending(payment_id, url))
     else:
+        # ошибка: сообщаем и возвращаем к началу
         await call.message.answer(PAYMENT_FAILED)
+        await start_cmd(call.message, state)
 
 # --- email state ---
 
