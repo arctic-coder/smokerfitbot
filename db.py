@@ -111,6 +111,7 @@ async def _init_subscriptions_pg(conn):
             currency TEXT,
             email TEXT, 
             plan TEXT NOT NULL DEFAULT 'month',
+            retry_attempts INTEGER NOT NULL DEFAULT 0,
             created_at TIMESTAMP,
             updated_at TIMESTAMP
         )
@@ -207,7 +208,8 @@ async def get_subscription(user_id: int):
             row["current_period_end"], row["next_charge_at"],
             row["amount"], row["currency"], row["email"],
             row["created_at"], row["updated_at"],
-            row["plan"],  
+            row["plan"],
+            row["retry_attempts"],  
         )
     return None
 

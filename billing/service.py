@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import Awaitable, Callable, Optional, Dict, Any
 from db import (
     upsert_subscription, upsert_payment_status, get_last_pending_payment_id,
     get_payment_confirmation_url, get_subscription, mark_payment_applied, cancel_other_pendings 
@@ -6,6 +7,8 @@ from db import (
 from billing.yookassa_client import create_checkout_payment, get_payment, create_recurring_payment
 import logging
 log = logging.getLogger("billing.service")
+# Async-колбэк уведомлений: (user_id, kind, ctx) -> await None
+Notifier = Optional[Callable[[int, str, Dict[str, Any]], Awaitable[None]]]
 
 def _add_months(dt: datetime, n: int) -> datetime:
     cur = dt
@@ -179,7 +182,7 @@ async def start_or_resume_checkout(user_id: int, email: str | None, plan: str):
 
 # ---------- АВТОСПИСАНИЯ ----------
 
-async def charge_recurring(user_id: int):
+async def charge_recurring(user_id: int, notifier: Notifier = None):
     """
     Пытается списать подписку по payment_method_id, если пришло время.
     Возвращает 'succeeded' | 'pending' | 'failed' | 'skipped'.
@@ -189,6 +192,8 @@ async def charge_recurring(user_id: int):
         return "skipped"
 
     status, pmid, cpe, nca = sub[1], sub[2], sub[3], sub[4]
+    plan = (sub[10] if len(sub) > 10 else None) or "month"
+    retry_attempts = (sub[11] if len(sub) > 11 else 0) or 0
     now = datetime.now(timezone.utc)
 
     # Списываем только если подписка активна и есть сохранённый способ оплаты
@@ -214,6 +219,15 @@ async def charge_recurring(user_id: int):
 
     if not nca or nca > now:
         return "skipped"
+    
+    # Перед первой попыткой уведомим пользователя, что "завтра будет списание".
+    # Первая попытка == retry_attempts == 0
+    if retry_attempts == 0 and notifier is not None:
+        try:
+            await notifier(user_id, "precharge", {"plan": plan})
+        except Exception:
+            log.exception("precharge notify failed for user_id=%s", user_id)
+
 
     # Не плодим новые pending, если уже есть
     pending = await get_last_pending_payment_id(user_id)
@@ -223,7 +237,6 @@ async def charge_recurring(user_id: int):
             return "pending"
 
     # Создаём рекуррентный платёж (передаём email!)
-    plan = (sub[10] if len(sub) > 10 else None) or "month"
     months = 12 if plan == "year" else 1
     payment = await create_recurring_payment(pmid, user_id, sub_email, plan)
 
@@ -238,6 +251,11 @@ async def charge_recurring(user_id: int):
         first_time = await mark_payment_applied(payment.id)
         if not first_time:
             # этот платёж уже применяли — просто сообщаем успех, не продлеваем ещё раз
+            if notifier is not None:
+                try:
+                    await notifier(user_id, "charged_success", {"plan": plan})
+                except Exception:
+                    log.exception("success notify failed for user_id=%s (idempotent)", user_id)
             return "succeeded"
 
         # продлеваем на месяц (от cpe, если он в будущем; иначе от now)
@@ -247,6 +265,7 @@ async def charge_recurring(user_id: int):
             status="active",
             current_period_end=new_cpe,
             next_charge_at=next_charge_at,
+            retry_attempts=0,
             amount=int(round(float(payment.amount.value) * 100)),
             currency=payment.amount.currency,
             plan=plan,
@@ -254,33 +273,44 @@ async def charge_recurring(user_id: int):
 
         # удаляем прочие "висящие" pending этого пользователя
         _ = await cancel_other_pendings(user_id, keep_payment_id=payment.id) 
+        if notifier is not None:
+            try:
+                await notifier(user_id, "charged_success", {"plan": plan})
+            except Exception:
+                log.exception("success notify failed for user_id=%s", user_id)
         return "succeeded"
-
 
     if payment.status in ("pending", "waiting_for_capture"):
         # ждём вебхук/проверку
         return "pending"
 
-    # failed: аккуратно назначим следующую попытку до конца периода,
-    # чтобы не молотить каждую минуту
-    cpe_dt = None
-    if cpe:
+    # failed: ретраи 1 раз в сутки, максимум до 3 попыток (0 + 2 ретрая)
+    # следующая дата попытки — на +1 день от предыдущей (если nca известна), иначе от now
+    # после 3-й неудачи прекращаем (next_charge_at=None)
+    if notifier is not None:
         try:
-            cpe_dt = datetime.fromisoformat(cpe.replace("Z", "+00:00")) if isinstance(cpe, str) else cpe
+            await notifier(user_id, "charged_failed", {"plan": plan, "attempt": retry_attempts + 1})
         except Exception:
-            cpe_dt = None
-        if cpe_dt and cpe_dt.tzinfo is None:
-            cpe_dt = cpe_dt.replace(tzinfo=timezone.utc)
-        elif cpe_dt:
-            cpe_dt = cpe_dt.astimezone(timezone.utc)
+            log.exception("failed notify failed for user_id=%s", user_id)
 
-    retry_at = min(cpe_dt, now + timedelta(hours=12)) if cpe_dt else (now + timedelta(hours=12))
-    await upsert_subscription(user_id, next_charge_at=retry_at)
+    if retry_attempts >= 2:
+        # попытки исчерпаны: отключаем автопродление
+        await upsert_subscription(
+            user_id,
+            status="cancelled",
+            next_charge_at=None,
+            retry_attempts=retry_attempts
+        )
+        return "failed"
+
+    base = nca if isinstance(nca, datetime) else now
+    next_try = base + timedelta(days=1)
+    await upsert_subscription(user_id, next_charge_at=next_try, retry_attempts=retry_attempts + 1)
     return "failed"
 
 
 
-async def charge_due_subscriptions():
+async def charge_due_subscriptions(notifier: Notifier = None):
     """
     Находит подписки, которым пора списать, и вызывает charge_recurring по каждой.
     Фильтр: status='active', payment_method_id NOT NULL, next_charge_at <= now.
@@ -290,6 +320,6 @@ async def charge_due_subscriptions():
     due = await list_due_subscriptions(now_dt)
     results = {"succeeded": 0, "pending": 0, "failed": 0, "skipped": 0}
     for user_id in due:
-        res = await charge_recurring(user_id)
+        res = await charge_recurring(user_id, notifier=notifier)
         results[res] = results.get(res, 0) + 1
     return results
