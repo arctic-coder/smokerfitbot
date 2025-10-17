@@ -15,7 +15,7 @@ from handlers import register_handlers
 from billing.service import check_and_activate, charge_due_subscriptions
 from jobs.autobiller import autobiller_loop
 from logging_setup import setup_logging
-from texts import RECURRING_FAILED_RETRY, RECURRING_PRECHARGE, RECURRING_SUCCESS
+from texts import RECURRING_FAILED_RETRY, RECURRING_FAILED_RETRY_LAST, RECURRING_PRECHARGE, RECURRING_SUCCESS
 from web.yk_handlers import yookassa_webhook
 
 log = logging.getLogger("main")
@@ -57,6 +57,8 @@ async def main():
                 await bot.send_message(user_id, RECURRING_SUCCESS)
             elif kind == "charged_failed":
                 await bot.send_message(user_id, RECURRING_FAILED_RETRY)
+            elif kind == "charged_failed_last":
+                await bot.send_message(user_id, RECURRING_FAILED_RETRY_LAST)
         except Exception:
             log.exception("notify failed user_id=%s kind=%s", user_id, kind)
 

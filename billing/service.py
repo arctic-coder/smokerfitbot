@@ -287,13 +287,12 @@ async def charge_recurring(user_id: int, notifier: Notifier = None):
     # failed: ретраи 1 раз в сутки, максимум до 3 попыток (0 + 2 ретрая)
     # следующая дата попытки — на +1 день от предыдущей (если nca известна), иначе от now
     # после 3-й неудачи прекращаем (next_charge_at=None)
-    if notifier is not None:
-        try:
-            await notifier(user_id, "charged_failed", {"plan": plan, "attempt": retry_attempts + 1})
-        except Exception:
-            log.exception("failed notify failed for user_id=%s", user_id)
-
     if retry_attempts >= 2:
+        if notifier is not None:
+            try:
+                await notifier(user_id, "charged_failed_last", {"plan": plan, "attempt": retry_attempts + 1})
+            except Exception:
+                log.exception("failed notify failed for user_id=%s", user_id)
         # попытки исчерпаны: отключаем автопродление
         await upsert_subscription(
             user_id,
@@ -303,12 +302,16 @@ async def charge_recurring(user_id: int, notifier: Notifier = None):
         )
         return "failed"
 
+    if notifier is not None:
+            try:
+                await notifier(user_id, "charged_failed", {"plan": plan, "attempt": retry_attempts + 1})
+            except Exception:
+                log.exception("failed notify failed for user_id=%s", user_id)
+
     base = nca if isinstance(nca, datetime) else now
     next_try = base + timedelta(days=1)
     await upsert_subscription(user_id, next_charge_at=next_try, retry_attempts=retry_attempts + 1)
     return "failed"
-
-
 
 async def charge_due_subscriptions(notifier: Notifier = None):
     """
