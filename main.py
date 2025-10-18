@@ -73,6 +73,12 @@ async def main():
             await autobiller_task
         await runner.cleanup()
         await bot.session.close()
+        
+        from db import close_db
+        try:
+            await close_db()
+        except Exception as e:
+            log.exception("Error closing DB pool: %s", e)
         log.info("Bot stopped")
 
 

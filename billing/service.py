@@ -116,6 +116,8 @@ async def check_and_activate(user_id: int, payment_id: str):
             payment_method_id=(p.payment_method.id if getattr(getattr(p, "payment_method", None), "saved", False) else (sub[2] if sub else None)),
             current_period_end=new_cpe,
             next_charge_at=next_charge_at,
+            retry_attempts=0,
+            precharge_notified=False,
             amount=int(round(float(p.amount.value) * 100)),
             currency=p.amount.currency,
             plan=plan,
