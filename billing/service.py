@@ -2,7 +2,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional, Dict, Any
 from db import (
     upsert_subscription, upsert_payment_status, get_last_pending_payment_id,
-    get_payment_confirmation_url, get_subscription, mark_payment_applied, cancel_other_pendings 
+    get_payment_confirmation_url, get_subscription, mark_payment_applied, cancel_other_pendings,
+    list_precharge_subscriptions, mark_precharge_sent
 )
 from billing.yookassa_client import create_checkout_payment, get_payment, create_recurring_payment
 import logging
@@ -220,15 +221,6 @@ async def charge_recurring(user_id: int, notifier: Notifier = None):
     if not nca or nca > now:
         return "skipped"
     
-    # Перед первой попыткой уведомим пользователя, что "завтра будет списание".
-    # Первая попытка == retry_attempts == 0
-    if retry_attempts == 0 and notifier is not None:
-        try:
-            await notifier(user_id, "precharge", {"plan": plan})
-        except Exception:
-            log.exception("precharge notify failed for user_id=%s", user_id)
-
-
     # Не плодим новые pending, если уже есть
     pending = await get_last_pending_payment_id(user_id)
     if pending:
@@ -266,6 +258,7 @@ async def charge_recurring(user_id: int, notifier: Notifier = None):
             current_period_end=new_cpe,
             next_charge_at=next_charge_at,
             retry_attempts=0,
+            precharge_notified=False,  # новый цикл — снова ждём precharge
             amount=int(round(float(payment.amount.value) * 100)),
             currency=payment.amount.currency,
             plan=plan,
@@ -326,3 +319,29 @@ async def charge_due_subscriptions(notifier: Notifier = None):
         res = await charge_recurring(user_id, notifier=notifier)
         results[res] = results.get(res, 0) + 1
     return results
+
+async def send_precharge_notifications(notifier: Notifier = None) -> int:
+    """
+    Разослать precharge, как только наступил порог (>= 24 часа до первой попытки).
+    Идемпотентность обеспечивается флагом precharge_notified в БД.
+    """
+    if notifier is None:
+        return 0
+    user_ids = await list_precharge_subscriptions()
+    sent = 0
+    for uid in user_ids:
+        sub = await get_subscription(uid)
+        if not sub:
+            continue
+        plan = (sub[10] if len(sub) > 10 else None) or "month"
+        retry_attempts = (sub[11] if len(sub) > 11 else 0) or 0
+        pre_sent = (sub[12] if len(sub) > 12 else False) or False
+        if retry_attempts != 0 or pre_sent:
+            continue
+        try:
+            await notifier(uid, "precharge", {"plan": plan})
+            await mark_precharge_sent(uid)
+            sent += 1
+        except Exception:
+            log.exception("precharge notify failed user_id=%s", uid)
+    return sent

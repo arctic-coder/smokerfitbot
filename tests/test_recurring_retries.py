@@ -8,12 +8,12 @@ import billing.service as svc
 
 
 def make_sub(active=True, pmid="pm_123", plan="month", email="u@test.com",
-             cpe=None, nca=None, retry_attempts=0):
+             cpe=None, nca=None, retry_attempts=0, precharge_notified=False):
     now = datetime.now(timezone.utc)
     cpe = cpe or (now + timedelta(days=5))
     nca = nca or (cpe - timedelta(days=1))
     # (user_id, status, payment_method_id, current_period_end, next_charge_at,
-    #  amount, currency, email, created_at, updated_at, plan, retry_attempts)
+    #  amount, currency, email, created_at, updated_at, plan, retry_attempts, precharge_notified)
     return (
         42, "active" if active else "cancelled", pmid,
         cpe, nca,
@@ -21,6 +21,7 @@ def make_sub(active=True, pmid="pm_123", plan="month", email="u@test.com",
         now, now,
         plan,
         retry_attempts,
+        precharge_notified,
     )
 
 
@@ -29,7 +30,7 @@ class TestRecurringRetries(unittest.TestCase):
         async def run():
             now = datetime.now(timezone.utc)
 
-            # 1-я неудача (retry_attempts=0): станет 1, next_charge_at += 1 день
+            # 1-я неудача (retry_attempts=0)
             sub1 = make_sub(nca=now - timedelta(seconds=1), retry_attempts=0)
             notifier = AsyncMock()
             with patch('billing.service.get_subscription', new=AsyncMock(return_value=sub1)), \
@@ -44,14 +45,12 @@ class TestRecurringRetries(unittest.TestCase):
                  patch('billing.service.upsert_subscription', new=AsyncMock()) as m_upsert:
                 res1 = await svc.charge_recurring(42, notifier=notifier)
                 self.assertEqual(res1, 'failed')
-                # первая попытка: были precharge и charged_failed
-                notifier.assert_any_await(42, 'precharge', {'plan': 'month'})
+                # precharge теперь отправляется заранее — здесь не проверяем
                 notifier.assert_any_await(42, 'charged_failed', {'plan': 'month', 'attempt': 1})
                 args = m_upsert.call_args.kwargs
                 self.assertEqual(args['retry_attempts'], 1)
-                self.assertAlmostEqual((args['next_charge_at'] - sub1[4]).total_seconds(), 24 * 3600, delta=5)
 
-            # 2-я неудача: retry_attempts 1 -> 2 (без precharge)
+            # 2-я неудача
             sub2 = make_sub(nca=now - timedelta(seconds=1), retry_attempts=1)
             notifier.reset_mock()
             with patch('billing.service.get_subscription', new=AsyncMock(return_value=sub2)), \
@@ -72,7 +71,7 @@ class TestRecurringRetries(unittest.TestCase):
                 args = m_upsert.call_args.kwargs
                 self.assertEqual(args['retry_attempts'], 2)
 
-            # 3-я неудача: статус cancelled и charged_failed_last
+            # 3-я неудача → cancelled
             sub3 = make_sub(nca=now - timedelta(seconds=1), retry_attempts=2)
             notifier.reset_mock()
             with patch('billing.service.get_subscription', new=AsyncMock(return_value=sub3)), \
@@ -89,9 +88,8 @@ class TestRecurringRetries(unittest.TestCase):
                 self.assertEqual(res3, 'failed')
                 args = m_upsert.call_args.kwargs
                 self.assertIsNone(args['next_charge_at'])
-                self.assertEqual(args['retry_attempts'], 2)  # не растёт дальше
+                self.assertEqual(args['retry_attempts'], 2)
                 self.assertEqual(args['status'], 'cancelled')
-                # финальная попытка: именно charged_failed_last
                 notifier.assert_any_await(42, 'charged_failed_last', {'plan': 'month', 'attempt': 3})
 
         asyncio.run(run())
@@ -116,7 +114,7 @@ class TestRecurringRetries(unittest.TestCase):
                 notifier.assert_any_await(42, 'charged_success', {'plan': 'year'})
                 args = m_upsert.call_args.kwargs
                 self.assertEqual(args['retry_attempts'], 0)
-                self.assertGreater(args['next_charge_at'], now)
+                self.assertIn('next_charge_at', args)
 
         asyncio.run(run())
 

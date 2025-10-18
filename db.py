@@ -112,6 +112,7 @@ async def _init_subscriptions_pg(conn):
             email TEXT, 
             plan TEXT NOT NULL DEFAULT 'month',
             retry_attempts INTEGER NOT NULL DEFAULT 0,
+            precharge_notified BOOLEAN NOT NULL DEFAULT FALSE,
             created_at TIMESTAMP,
             updated_at TIMESTAMP
         )
@@ -210,9 +211,48 @@ async def get_subscription(user_id: int):
             row["created_at"], row["updated_at"],
             row["plan"],
             row["retry_attempts"],  
+            row["precharge_notified"],
         )
     return None
 
+async def list_precharge_subscriptions() -> list[int]:
+    """
+    Кому отправить precharge: как только наступил порог (>= 24 часа до первой попытки).
+    Условия:
+      - status='active'
+      - retry_attempts=0 (первая попытка)
+      - payment_method_id IS NOT NULL
+      - next_charge_at IS NOT NULL
+      - precharge_notified = FALSE
+      - now() >= next_charge_at - 24h
+    """
+    conn = await asyncpg.connect(PG_DSN)
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT user_id
+            FROM subscriptions
+            WHERE status = 'active'
+              AND retry_attempts = 0
+              AND payment_method_id IS NOT NULL
+              AND next_charge_at IS NOT NULL
+              AND COALESCE(precharge_notified, FALSE) = FALSE
+              AND now() >= (next_charge_at - INTERVAL '24 hours')
+            """
+        )
+        return [r["user_id"] for r in rows]
+    finally:
+        await conn.close()
+
+async def mark_precharge_sent(user_id: int) -> None:
+    conn = await asyncpg.connect(PG_DSN)
+    try:
+        await conn.execute(
+            "UPDATE subscriptions SET precharge_notified = TRUE, updated_at = NOW() WHERE user_id = $1",
+            user_id
+        )
+    finally:
+        await conn.close()
 
 async def _init_payments_pg(conn):
     await conn.execute("""
