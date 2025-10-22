@@ -1,8 +1,8 @@
 from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 from texts import ( BTN_DONE, BTN_FILL_FORM, BTN_JUNIOR, BTN_MUSCLE_BACK_MORE, 
 BTN_MUSCLE_BELLY_MORE, BTN_MUSCLE_BREAST_MORE, BTN_MUSCLE_CALVES, BTN_MUSCLE_LEGS_MORE, 
-BTN_MUSCLE_SHOULDERS, BTN_MUSCLE_TRICEPC, BTN_NO_NEED, BTN_START, BTN_USE_EXISTING_FORM, 
-LEVELS, EQUIPMENT, LIMITATIONS, DURATION, DURATION_BEGINNER, BTN_RETURN_TO_PAYMENT, 
+BTN_MUSCLE_SHOULDERS, BTN_MUSCLE_TRICEPC, BTN_NO_NEED, BTN_USE_EXISTING_FORM, LEVELS, 
+EQUIPMENT, LIMITATIONS, DURATION, DURATION_BEGINNER, BTN_RETURN_TO_PAYMENT, 
 BTN_CHECK_PAYMENT, BTN_CANCEL_PAYMENT, BTN_START_SUB_MONTH, BTN_START_SUB_YEAR)
 
 def _mk(rows, one_time: bool = False) -> ReplyKeyboardMarkup:
@@ -12,10 +12,7 @@ def _mk(rows, one_time: bool = False) -> ReplyKeyboardMarkup:
         kb.row(*[str(x) for x in r])
     return kb
 
-# начальная кнопка «Старт»
-start_button_kb = _mk([[BTN_START]])
-
-# основной экран после старта
+# стартовые кнопки
 start_kb = _mk([[BTN_FILL_FORM, BTN_USE_EXISTING_FORM]])
 
 # уровень подготовки
