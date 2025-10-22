@@ -4,7 +4,7 @@ from billing.service import charge_due_subscriptions, send_precharge_notificatio
 
 log = logging.getLogger(__name__)
 
-# reccurent payments, checking subscriptions table if next_charge_at is already in past
+# recurrent payments, checking subscriptions table if next_charge_at is already in past
 async def autobiller_loop(interval_sec: int, notifier=None) -> None:
     while True:
         try:

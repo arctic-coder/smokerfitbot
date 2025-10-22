@@ -11,7 +11,7 @@ from db import get_user, save_user, get_subscription, set_free_workout_used
 from keyboards import level_kb, limitations_kb, equipment_kb, duration_kb_for, extras_kb, kb_choose_plan
 from texts import (
     BTN_35_45, BTN_EQUIP_NONE, BTN_JUNIOR, BTN_LIMIT_NO, BTN_NO_NEED, LEVEL_PROMPT, LIMITATIONS_PROMPT, EQUIPMENT_PROMPT, DURATION_PROMPT, EXTRAS_PROMPT,
-    INVALID_CHOICE, PROFILE_NOT_FOUND, WORKOUT_STARTING, WORKOUT_EMPTY, WORKOUT_HEADER,
+    INVALID_CHOICE, PROFILE_NOT_FOUND, WORKOUT_FOOTER, WORKOUT_STARTING, WORKOUT_EMPTY, WORKOUT_HEADER,
     BTN_FILL_FORM, BTN_USE_EXISTING_FORM, BTN_DONE, SUB_REQUIRED,
     LEVELS, LIMITATIONS, EQUIPMENT, DURATION, DURATION_BEGINNER, EXTRA_MUSCLE_OPTIONS
 )
@@ -222,7 +222,8 @@ async def _generate_and_send_workout(message: types.Message, state: FSMContext) 
             if url:
                 name = f'<a href="{url}">{name}</a>'
             lines.append(f"<b>{group}</b>: {name}: {sets_reps}")
-        await message.answer("\n\n".join(lines), parse_mode="HTML")
+        lines.append(WORKOUT_FOOTER)
+        await message.answer("\n\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
 
     # сохраняем анкету
     try:

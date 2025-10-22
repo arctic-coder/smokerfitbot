@@ -5,7 +5,7 @@ from billing.service import check_and_activate
 from db import get_user_id_by_payment_id
 
 log = logging.getLogger(__name__)
-# currently only sucseed webhoocs. NEED TO BE CONFIGURED IN YOKASSA SHOP 
+# currently only succeed webhooks. NEED TO BE CONFIGURED IN YOOKASSA SHOP
 async def yookassa_webhook(request: web.Request) -> web.Response:
     try:
         data = await request.json()
