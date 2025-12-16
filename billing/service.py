@@ -5,7 +5,7 @@ from db import (
     get_payment_confirmation_url, get_subscription, mark_payment_applied, cancel_other_pendings,
     list_precharge_subscriptions, mark_precharge_sent
 )
-from billing.yookassa_client import create_checkout_payment, get_payment, create_recurring_payment
+from billing.yookassa_client import amount_for, create_checkout_payment, get_payment, create_recurring_payment
 import logging
 log = logging.getLogger("billing.service")
 # Async-колбэк уведомлений: (user_id, kind, ctx) -> await None
