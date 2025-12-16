@@ -212,21 +212,24 @@ async def create_checkout_payment(
     Создаёт платёж с редиректом (initial checkout) и сохранением способа оплаты.
     Возвращает (payment_id, confirmation_url)
     """
-    cents, value, title = amount_for(plan, override_cents=price_cents_override, title_override=promo_title)
+    cents, value, base_title = amount_for(plan, override_cents=price_cents_override)
+    # Оставляем стандартное название плана и лишь помечаем, что оплата по промокоду
+    desc_title = f"{base_title} (Промокод)" if promo_code else base_title
     payload = {
         "amount": {"value": value, "currency": SUBSCRIPTION_CURRENCY},
         "confirmation": {"type": "redirect", "return_url": RETURN_URL},
         "capture": True,
         "save_payment_method": True,
-        "description": title,
+        "description": desc_title,
         "metadata": {
             "user_id": str(user_id),
             "origin": "initial",
             "plan": plan,
             "promo_code": promo_code,
             "promo_price_cents": cents if price_cents_override is not None else None,
+            "promo_title": promo_title,
         },
-        "receipt": _make_receipt(email, value, title),
+        "receipt": _make_receipt(email, value, desc_title),
     }
     payload["metadata"] = {k: v for k, v in payload["metadata"].items() if v is not None}
     idem = str(uuid.uuid4())
