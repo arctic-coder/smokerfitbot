@@ -10,11 +10,11 @@ def _fmt_rub(cents: int) -> str:
 
 def start_sub_month_label(amount_cents: int | None = None) -> str:
     value = _fmt_rub(amount_cents if amount_cents is not None else SUBSCRIPTION_PRICE_MONTH)
-    return f"گ?‘\"گ?‘?گ?گٌ‘'‘? گُگ?گ?گُگٌ‘?گَ‘? گ?گّ گ?گç‘?‘?‘إ {value} ¢'?"
+    return f"Оформить подписку на месяц {value} ₽"
 
 def start_sub_year_label(amount_cents: int | None = None) -> str:
     value = _fmt_rub(amount_cents if amount_cents is not None else SUBSCRIPTION_PRICE_YEAR)
-    return f"گ?‘\"گ?‘?گ?گٌ‘'‘? گُگ?گ?گُگٌ‘?گَ‘? گ?گّ گ?گ?گ? {value} ¢'?"
+    return f"Оформить подписку на год {value} ₽"
 
 AMOUNT_MONTH = _fmt_rub(SUBSCRIPTION_PRICE_MONTH)
 AMOUNT_YEAR  = _fmt_rub(SUBSCRIPTION_PRICE_YEAR)
