@@ -8,6 +8,14 @@ SUBSCRIPTION_PRICE_YEAR = int(os.getenv("SUBSCRIPTION_PRICE_YEAR", "299000"))
 def _fmt_rub(cents: int) -> str:
     return "{:.2f}".format(cents / 100)
 
+def start_sub_month_label(amount_cents: int | None = None) -> str:
+    value = _fmt_rub(amount_cents if amount_cents is not None else SUBSCRIPTION_PRICE_MONTH)
+    return f"گ?‘\"گ?‘?گ?گٌ‘'‘? گُگ?گ?گُگٌ‘?گَ‘? گ?گّ گ?گç‘?‘?‘إ {value} ¢'?"
+
+def start_sub_year_label(amount_cents: int | None = None) -> str:
+    value = _fmt_rub(amount_cents if amount_cents is not None else SUBSCRIPTION_PRICE_YEAR)
+    return f"گ?‘\"گ?‘?گ?گٌ‘'‘? گُگ?گ?گُگٌ‘?گَ‘? گ?گّ گ?گ?گ? {value} ¢'?"
+
 AMOUNT_MONTH = _fmt_rub(SUBSCRIPTION_PRICE_MONTH)
 AMOUNT_YEAR  = _fmt_rub(SUBSCRIPTION_PRICE_YEAR)
 
@@ -181,6 +189,11 @@ SUBSCRIBE_PROMPT = "Оформление подписки."
 SUBSCRIBE_FROM_COMMAND = "Выберите подписку — на месяц или на год.\nПодписка продлевается автоматически по выбранному плану. Отменить можно в любой момент командой /cancel"
 
 HELP = "Если что-то сломалось, пишите сюда: @halemaumau"
+
+# --- Промокоды ---
+PROMO_PROMPT = "Есть промокод? Введите его сообщением или переходите к оплате без промокода."
+PROMO_INVALID = "Промокод не найден или неактивен. Попробуйте снова или продолжите без промокода."
+PROMO_APPLIED = "Промокод применён. Выберите план с промо-ценой."
 
 # --- Уведомления автосписаний ---
 RECURRING_PRECHARGE    = "Напоминание: завтра спишем продление подписки."

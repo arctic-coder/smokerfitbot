@@ -3,7 +3,8 @@ from texts import ( BTN_DONE, BTN_FILL_FORM, BTN_JUNIOR, BTN_MUSCLE_BACK_MORE,
 BTN_MUSCLE_BELLY_MORE, BTN_MUSCLE_BREAST_MORE, BTN_MUSCLE_CALVES, BTN_MUSCLE_LEGS_MORE, 
 BTN_MUSCLE_SHOULDERS, BTN_MUSCLE_TRICEPC, BTN_NO_NEED, BTN_USE_EXISTING_FORM, LEVELS, 
 EQUIPMENT, LIMITATIONS, DURATION, DURATION_BEGINNER, BTN_RETURN_TO_PAYMENT, 
-BTN_CHECK_PAYMENT, BTN_CANCEL_PAYMENT, BTN_START_SUB_MONTH, BTN_START_SUB_YEAR)
+BTN_CHECK_PAYMENT, BTN_CANCEL_PAYMENT, BTN_START_SUB_MONTH, BTN_START_SUB_YEAR,
+start_sub_month_label, start_sub_year_label)
 
 def _mk(rows, one_time: bool = False) -> ReplyKeyboardMarkup:
     kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=one_time)
@@ -34,9 +35,12 @@ equipment_kb = _mk([
 ])
 
 def kb_choose_plan() -> InlineKeyboardMarkup:
+    return kb_choose_plan_with_prices()
+
+def kb_choose_plan_with_prices(price_month_cents: int | None = None, price_year_cents: int | None = None) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton(BTN_START_SUB_MONTH, callback_data="go_subscribe:month"))
-    kb.add(InlineKeyboardButton(BTN_START_SUB_YEAR,  callback_data="go_subscribe:year"))
+    kb.add(InlineKeyboardButton(start_sub_month_label(price_month_cents), callback_data="go_subscribe:month"))
+    kb.add(InlineKeyboardButton(start_sub_year_label(price_year_cents),  callback_data="go_subscribe:year"))
     return kb
 
 # длительность
@@ -54,6 +58,11 @@ def extras_kb() -> ReplyKeyboardMarkup:
         [BTN_MUSCLE_BREAST_MORE, BTN_NO_NEED, BTN_DONE],
     ]
     return _mk(rows)
+
+def kb_promo_prompt() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("Перейти к оплате без промокода", callback_data="promo_skip"))
+    return kb
 
 def kb_subscribe(url: str | None) -> InlineKeyboardMarkup:
     if url:

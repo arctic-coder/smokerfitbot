@@ -11,7 +11,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from handlers.common import start_cmd
 from yookassa.domain.exceptions.bad_request_error import BadRequestError
 from billing.yookassa_client import amount_for, get_payment
-from keyboards import kb_payment_pending, kb_choose_plan
+from keyboards import kb_payment_pending, kb_choose_plan, kb_choose_plan_with_prices, kb_promo_prompt
 from billing.service import start_or_resume_checkout, is_active
 
 from states import Form
@@ -19,12 +19,12 @@ from texts import (
     EMAIL_INVALID, PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
     STATUS_NOT_SET, STATUS_LINE, STATUS_PAID_TILL, STATUS_NEXT_CHARGE, STATUS_FOOTER,
     EMAIL_PROMPT, SUBSCRIBE_CREATE, SUBSCRIBE_FROM_COMMAND, SUBSCRIBE_RESUME_FAIL, SUBSCRIBE_YK_REJECT, SUB_ALREADY_ACTIVE, CANCEL_ASK, CANCEL_ALREADY, CANCEL_DONE, CANCEL_NOT_ACTIVE, CANCEL_NONE,
-    CANCEL_CURRENT, BTN_CANCEL_YES, BTN_CANCEL_NO,
+    CANCEL_CURRENT, BTN_CANCEL_YES, BTN_CANCEL_NO, PROMO_PROMPT, PROMO_INVALID, PROMO_APPLIED,
 )
 from billing.service import start_or_resume_checkout, check_and_activate, cancel_subscription
 from db import (
     get_subscription, get_last_pending_payment_id, get_payment_confirmation_url,
-    upsert_subscription, upsert_payment_status,
+    upsert_subscription, upsert_payment_status, has_active_promocodes, get_active_promocode,
 )
 
 ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))
@@ -52,7 +52,15 @@ async def _start_subscription_flow(reply, user_id: int, state: FSMContext, sub_r
     try:
         data = await state.get_data()
         plan = data.get("plan") or "month"
-        payment_id, url = await start_or_resume_checkout(user_id, email=sub_email, plan=plan)
+        price_override, promo_code, promo_title = _promo_params_for_plan(data, plan)
+        payment_id, url = await start_or_resume_checkout(
+            user_id,
+            email=sub_email,
+            plan=plan,
+            price_override_cents=price_override,
+            promo_code=promo_code,
+            promo_title=promo_title,
+        )
     except BadRequestError as e:
         await reply(SUBSCRIBE_YK_REJECT.format(desc=getattr(e, "description", "invalid_request")))
         return
@@ -74,20 +82,73 @@ def _extract_email_from_subscription_row(sub) -> Optional[str]:
             return x
     return None
 
+def _promo_params_for_plan(data: dict, plan: str) -> tuple[int | None, str | None, str | None]:
+    promo_code = data.get("promo_code")
+    promo_title = data.get("promo_title")
+    price_override = None
+    if promo_code:
+        key = "promo_price_year_cents" if plan == "year" else "promo_price_month_cents"
+        try:
+            price_override = int(data.get(key)) if data.get(key) is not None else None
+        except Exception:
+            price_override = None
+    return price_override, promo_code, promo_title
+
 # --- commands ---
 async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     sub = await get_subscription(user_id)
     if not is_active(sub):
-        await state.update_data(plan=None)
-        await message.answer(SUBSCRIBE_FROM_COMMAND, reply_markup=kb_choose_plan())
+        await state.update_data(
+            plan=None,
+            promo_code=None,
+            promo_title=None,
+            promo_price_month_cents=None,
+            promo_price_year_cents=None,
+        )
+        if await has_active_promocodes():
+            await Form.promo.set()
+            await message.answer(PROMO_PROMPT, reply_markup=kb_promo_prompt())
+        else:
+            await message.answer(SUBSCRIBE_FROM_COMMAND, reply_markup=kb_choose_plan())
     else: #already active subscription
         cpe = _date_only(sub[3] if sub else None)
         cancelled_note = " (продление отключено)" if sub and sub[1] == "cancelled" else ""
         await message.answer(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
         return
+async def process_promo_code(message: types.Message, state: FSMContext) -> None:
+    code = (message.text or "").strip()
+    if not code:
+        await message.answer(PROMO_INVALID, reply_markup=kb_promo_prompt())
+        return
 
-        
+    promo = await get_active_promocode(code)
+    if not promo:
+        await message.answer(PROMO_INVALID, reply_markup=kb_promo_prompt())
+        return
+
+    _, title, _, _, price_month, price_year, _ = promo
+    await state.update_data(
+        promo_code=promo[0],
+        promo_title=title,
+        promo_price_month_cents=price_month,
+        promo_price_year_cents=price_year,
+        plan=None,
+    )
+    await message.answer(PROMO_APPLIED, reply_markup=kb_choose_plan_with_prices(price_month, price_year))
+
+
+async def promo_skip_cb(call: types.CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
+    await state.update_data(
+        promo_code=None,
+        promo_title=None,
+        promo_price_month_cents=None,
+        promo_price_year_cents=None,
+        plan=None,
+    )
+    await call.message.edit_text(SUBSCRIBE_FROM_COMMAND, reply_markup=kb_choose_plan())
+
 
 async def status_cmd(message: types.Message) -> None:
     user_id = message.from_user.id
@@ -181,7 +242,15 @@ async def process_email_for_subscription(message: types.Message, state: FSMConte
     try:
         data = await state.get_data()
         plan = data.get("plan") or "month"
-        payment_id, url = await start_or_resume_checkout(user_id, email=email, plan=plan)
+        price_override, promo_code, promo_title = _promo_params_for_plan(data, plan)
+        payment_id, url = await start_or_resume_checkout(
+            user_id,
+            email=email,
+            plan=plan,
+            price_override_cents=price_override,
+            promo_code=promo_code,
+            promo_title=promo_title,
+        )
     except BadRequestError as e:
         await state.finish()
         await message.answer(SUBSCRIBE_YK_REJECT.format(desc=getattr(e, "description", "invalid_request")))
@@ -278,12 +347,14 @@ async def admin_next_charge_cmd(message: types.Message):
 def register_subscription_handlers(dp: Dispatcher) -> None:
     # команды
     dp.register_message_handler(subscribe_cmd, commands="subscribe", state="*")
+    dp.register_message_handler(process_promo_code, state=Form.promo)
     dp.register_message_handler(status_cmd, commands="status", state="*")
     dp.register_message_handler(cancel_cmd, commands="cancel", state="*")
     dp.register_message_handler(process_email_for_subscription, state=Form.email)
 
     # колбэки
     dp.register_callback_query_handler(subscribe_cb, lambda c: (c.data or "").startswith("go_subscribe"), state="*")
+    dp.register_callback_query_handler(promo_skip_cb, lambda c: c.data == "promo_skip", state="*")
     dp.register_callback_query_handler(cancel_payment_cb, lambda c: c.data.startswith("cancelpay:"), state="*")
     dp.register_callback_query_handler(check_payment_cb, lambda c: c.data.startswith("chkpay:"), state="*")
     dp.register_callback_query_handler(cancel_yes_cb, lambda c: c.data == "cancel_yes", state="*")

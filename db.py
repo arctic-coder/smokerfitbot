@@ -313,6 +313,42 @@ async def get_last_pending_payment_id(user_id: int) -> str | None:
         """, user_id, list(pending_states))
     
     return row["payment_id"] if row else None
+
+async def has_active_promocodes() -> bool:
+    async with acquire_conn() as conn:
+        row = await conn.fetchrow("""
+            SELECT 1
+            FROM promocodes
+            WHERE (starts_at IS NULL OR starts_at <= now())
+              AND (expires_at IS NULL OR expires_at > now())
+            LIMIT 1
+        """)
+    return bool(row)
+
+async def get_active_promocode(code: str):
+    norm = (code or "").strip()
+    if not norm:
+        return None
+    async with acquire_conn() as conn:
+        row = await conn.fetchrow("""
+            SELECT code, title, starts_at, expires_at, price_month_cents, price_year_cents, created_at
+            FROM promocodes
+            WHERE lower(code) = lower($1)
+              AND (starts_at IS NULL OR starts_at <= now())
+              AND (expires_at IS NULL OR expires_at > now())
+            LIMIT 1
+        """, norm)
+    if not row:
+        return None
+    return (
+        row["code"],
+        row["title"],
+        row["starts_at"],
+        row["expires_at"],
+        row["price_month_cents"],
+        row["price_year_cents"],
+        row["created_at"],
+    )
     
 async def list_due_subscriptions(now_dt: datetime):
     """
@@ -438,6 +474,7 @@ async def init_db():
         await _init_subscriptions_pg(conn)
         await _init_payments_pg(conn)
         await _init_exercises_pg(conn)
+        await _init_promocodes_pg(conn)
 
 async def close_db() -> None:
     """
@@ -519,3 +556,16 @@ async def _init_exercises_pg(conn):
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_limits     ON exercises USING GIN (allowed_limitations);")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_eqdnf      ON exercises USING GIN (equipment_dnf);")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_group      ON exercises (muscle_group);")
+
+async def _init_promocodes_pg(conn):
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS promocodes (
+            code TEXT PRIMARY KEY,
+            title TEXT,
+            starts_at TIMESTAMP NULL,
+            expires_at TIMESTAMP NULL,
+            price_month_cents INTEGER NOT NULL,
+            price_year_cents INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)

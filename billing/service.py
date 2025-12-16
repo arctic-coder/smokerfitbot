@@ -166,21 +166,48 @@ def is_active(sub_row) -> bool:
     return status in ("active", "cancelled") and cpe_dt > datetime.now(timezone.utc)
 
 
-async def start_or_resume_checkout(user_id: int, email: str | None, plan: str):
+async def start_or_resume_checkout(
+    user_id: int,
+    email: str | None,
+    plan: str,
+    price_override_cents: int | None = None,
+    promo_code: str | None = None,
+    promo_title: str | None = None,
+):
     last_pending_id = await get_last_pending_payment_id(user_id)
     if last_pending_id:
         p = await get_payment(last_pending_id)
         if p and p.status in ("pending", "waiting_for_capture"):
             md = getattr(p, "metadata", None)
             p_plan = (md.get("plan") if md else None) or "month"
-            if p_plan == plan:
+            p_promo_code = (md.get("promo_code") if md else None) or None
+            try:
+                p_price = int(md.get("promo_price_cents")) if md and md.get("promo_price_cents") is not None else None
+            except Exception:
+                p_price = None
+            desired_price = price_override_cents
+            if p_price is None and getattr(p, "amount", None):
+                try:
+                    p_price = int(round(float(p.amount.value) * 100))
+                except Exception:
+                    p_price = None
+
+            if p_plan == plan and (desired_price is None or p_price == desired_price) and (promo_code or None) == (p_promo_code or None):
                 url = _get_confirmation_url(p) or await get_payment_confirmation_url(last_pending_id)
                 if url:
                     return last_pending_id, url
             # если план отличается — не переиспользуем тот pending
 
-    payment_id, url = await create_checkout_payment(user_id, email, plan)
-    await upsert_payment_status(user_id, payment_id, 0, "RUB", "pending", raw_text="{}", confirmation_url=url)
+    payment_id, url = await create_checkout_payment(
+        user_id,
+        email,
+        plan,
+        price_cents_override=price_override_cents,
+        promo_code=promo_code,
+        promo_title=promo_title,
+    )
+    fallback_amount = price_override_cents if price_override_cents is not None else amount_for(plan)[0]
+    await upsert_payment_status(user_id, payment_id, fallback_amount, "RUB", "pending", raw_text="{}", confirmation_url=url)
     return payment_id, url
 
 # ---------- АВТОСПИСАНИЯ ----------
