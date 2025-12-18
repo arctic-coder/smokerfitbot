@@ -30,11 +30,15 @@ class YookassaNetworkError(Exception):
 def _fmt(cents: int) -> str:
     return "{:.2f}".format(cents / 100)
 
-def amount_for(plan: str) -> tuple[int, str, str]:
+def amount_for(plan: str, override_cents: int | None = None, title_override: str | None = None) -> tuple[int, str, str]:
     if plan == "year":
         cents, title = SUBSCRIPTION_PRICE_YEAR, SUBSCRIPTION_TITLE_YEAR
     else:
         cents, title = SUBSCRIPTION_PRICE_MONTH, SUBSCRIPTION_TITLE_MONTH
+    if override_cents is not None:
+        cents = int(override_cents)
+    if title_override:
+        title = title_override
     return cents, _fmt(cents), title
 
 def _log_requests_error(prefix: str, exc: Exception):
@@ -196,21 +200,38 @@ async def _payment_find_async(payment_id: str):
         raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
 
 # ==== ВЫСОКОУРОВНЕВЫЕ ОБЁРТКИ ДЛЯ ПРИЛОЖЕНИЯ ====
-async def create_checkout_payment(user_id: int, email: str | None, plan: str):
+async def create_checkout_payment(
+    user_id: int,
+    email: str | None,
+    plan: str,
+    price_cents_override: int | None = None,
+    promo_code: str | None = None,
+    promo_title: str | None = None,
+):
     """
     Создаёт платёж с редиректом (initial checkout) и сохранением способа оплаты.
     Возвращает (payment_id, confirmation_url)
     """
-    cents, value, title = amount_for(plan)
+    cents, value, base_title = amount_for(plan, override_cents=price_cents_override)
+    # Оставляем стандартное название плана и лишь помечаем, что оплата по промокоду
+    desc_title = f"{base_title} (Промокод)" if promo_code else base_title
     payload = {
         "amount": {"value": value, "currency": SUBSCRIPTION_CURRENCY},
         "confirmation": {"type": "redirect", "return_url": RETURN_URL},
         "capture": True,
         "save_payment_method": True,
-        "description": title,
-        "metadata": {"user_id": str(user_id), "origin": "initial", "plan": plan},
-        "receipt": _make_receipt(email, value, title),
+        "description": desc_title,
+        "metadata": {
+            "user_id": str(user_id),
+            "origin": "initial",
+            "plan": plan,
+            "promo_code": promo_code,
+            "promo_price_cents": cents if price_cents_override is not None else None,
+            "promo_title": promo_title,
+        },
+        "receipt": _make_receipt(email, value, desc_title),
     }
+    payload["metadata"] = {k: v for k, v in payload["metadata"].items() if v is not None}
     idem = str(uuid.uuid4())
     p = await _payment_create_async(payload, idem)
     conf_obj = getattr(p, "confirmation", None)

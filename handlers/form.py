@@ -7,12 +7,12 @@ from aiogram.types import ReplyKeyboardRemove
 
 from states import Form
 from utils import generate_workout
-from db import get_user, save_user, get_subscription, set_free_workout_used
-from keyboards import level_kb, limitations_kb, equipment_kb, duration_kb_for, extras_kb, kb_choose_plan
+from db import get_user, save_user, get_subscription, set_free_workout_used, has_active_promocodes
+from keyboards import level_kb, limitations_kb, equipment_kb, duration_kb_for, extras_kb, kb_choose_plan, kb_promo_prompt
 from texts import (
     BTN_35_45, BTN_EQUIP_NONE, BTN_JUNIOR, BTN_LIMIT_NO, BTN_NO_NEED, LEVEL_PROMPT, LIMITATIONS_PROMPT, EQUIPMENT_PROMPT, DURATION_PROMPT, EXTRAS_PROMPT,
     INVALID_CHOICE, PROFILE_NOT_FOUND, WORKOUT_FOOTER, WORKOUT_STARTING, WORKOUT_EMPTY, WORKOUT_HEADER,
-    BTN_FILL_FORM, BTN_USE_EXISTING_FORM, BTN_DONE, SUB_REQUIRED,
+    BTN_FILL_FORM, BTN_USE_EXISTING_FORM, BTN_DONE, SUB_REQUIRED, PROMO_PROMPT,
     LEVELS, LIMITATIONS, EQUIPMENT, DURATION, DURATION_BEGINNER, EXTRA_MUSCLE_OPTIONS
 )
 from billing.service import is_active
@@ -158,7 +158,18 @@ async def duration_step(message: types.Message, state: FSMContext) -> None:
         if not free_used:
             await set_free_workout_used(user_id, True)
         else:
-            await message.answer(SUB_REQUIRED, reply_markup=kb_choose_plan())
+            await state.update_data(
+                plan=None,
+                promo_code=None,
+                promo_title=None,
+                promo_price_month_cents=None,
+                promo_price_year_cents=None,
+            )
+            if await has_active_promocodes():
+                await Form.promo.set()
+                await message.answer(f"{SUB_REQUIRED}\n\n{PROMO_PROMPT}", reply_markup=kb_promo_prompt())
+            else:
+                await message.answer(SUB_REQUIRED, reply_markup=kb_choose_plan())
             return
 
     if message.text == BTN_35_45:

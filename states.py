@@ -4,6 +4,7 @@ class Form(StatesGroup):
     level = State()
     limitations = State()
     equipment = State()
+    promo = State()
     duration = State()
     email = State()
     extras = State()
