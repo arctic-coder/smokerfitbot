@@ -36,7 +36,7 @@ def _date_only(dt: datetime | None) -> str:
     return dt.strftime("%Y-%m-%d") if dt else "-"
 
 async def _start_subscription_flow(reply, user_id: int, state: FSMContext, sub_row) -> None:
-    if is_active(sub_row):
+    if is_active(sub_row, include_cancelled=False):
         cpe = _date_only(sub_row[3] if sub_row else None)
         cancelled_note = " (продление отключено)" if sub_row and sub_row[1] == "cancelled" else ""
         await reply(SUB_ALREADY_ACTIVE.format(cancelled=cancelled_note, cpe=cpe))
@@ -98,7 +98,7 @@ def _promo_params_for_plan(data: dict, plan: str) -> tuple[int | None, str | Non
 async def subscribe_cmd(message: types.Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     sub = await get_subscription(user_id)
-    if not is_active(sub):
+    if not is_active(sub, include_cancelled=False):
         await state.update_data(
             plan=None,
             promo_code=None,
