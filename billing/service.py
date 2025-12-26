@@ -138,7 +138,7 @@ async def cancel_subscription(user_id: int):
     await upsert_subscription(user_id, status="cancelled")
 
 
-def is_active(sub_row) -> bool:
+def is_active(sub_row, include_cancelled: bool = True) -> bool:
     if not sub_row:
         return False
     # sub_row: (user_id, status, payment_method_id, current_period_end, next_charge_at, amount, currency, created_at, updated_at)
@@ -163,7 +163,8 @@ def is_active(sub_row) -> bool:
     else:
         cpe_dt = cpe_dt.astimezone(timezone.utc)
 
-    return status in ("active", "cancelled") and cpe_dt > datetime.now(timezone.utc)
+    allowed_statuses = ("active", "cancelled") if include_cancelled else ("active",)
+    return status in allowed_statuses and cpe_dt > datetime.now(timezone.utc)
 
 
 async def start_or_resume_checkout(
