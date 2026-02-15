@@ -1,10 +1,10 @@
-import os
 import json
-import asyncpg
-from dotenv import load_dotenv
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional
+
+import asyncpg
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -13,7 +13,8 @@ PG_DSN = os.getenv("DATABASE_URL")
 
 # ---------- connection pool ----------
 # Глобальный пул соединений. Создаётся в init_db(), закрывается в close_db().
-pool: Optional[asyncpg.Pool] = None
+pool: asyncpg.Pool | None = None
+
 
 @asynccontextmanager
 async def acquire_conn():
@@ -33,9 +34,11 @@ async def acquire_conn():
         async with pool.acquire() as conn:
             yield conn
 
+
 # ---------- helpers ----------
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
 
 def _to_pg_timestamp(v) -> datetime | None:
     """
@@ -47,7 +50,8 @@ def _to_pg_timestamp(v) -> datetime | None:
     # Для TIMESTAMP (без таймзоны) в PG лучше передавать naive UTC
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
-def _parse_iso(dt_val):
+
+def _parse_iso(dt_val: str | datetime | None) -> datetime | None:
     """
     Принимает str | datetime | None -> возвращает aware datetime в UTC или None.
     """
@@ -62,16 +66,21 @@ def _parse_iso(dt_val):
         return None
 
 
-
-
-async def save_user(user_id, level, limitations, equipment, duration_minutes, extra_groups=None):
+async def save_user(
+    user_id: int,
+    level: str | None,
+    limitations: list | None,
+    equipment: list | None,
+    duration_minutes: str | None,
+    extra_groups: list | None = None,
+) -> None:
     lim_json = json.dumps(limitations or [])
-    eq_json  = json.dumps(equipment or [])
-    ex_json  = json.dumps(extra_groups or [])
-
+    eq_json = json.dumps(equipment or [])
+    ex_json = json.dumps(extra_groups or [])
 
     async with acquire_conn() as conn:
-        await conn.execute("""
+        await conn.execute(
+            """
                 INSERT INTO users (user_id, level, limitations, equipment, duration_minutes, extra_groups)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (user_id) DO UPDATE SET
@@ -80,13 +89,20 @@ async def save_user(user_id, level, limitations, equipment, duration_minutes, ex
                     equipment = EXCLUDED.equipment,
                     duration_minutes = EXCLUDED.duration_minutes,
                     extra_groups = EXCLUDED.extra_groups
-        """, user_id, level, lim_json, eq_json, duration_minutes, ex_json)
+        """,
+            user_id,
+            level,
+            lim_json,
+            eq_json,
+            duration_minutes,
+            ex_json,
+        )
 
 
-async def get_user(user_id):
+async def get_user(user_id: int) -> tuple | None:
     async with acquire_conn() as conn:
         row = await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
-  
+
     if row:
         return (
             row["user_id"],
@@ -96,43 +112,49 @@ async def get_user(user_id):
             row["duration_minutes"],
             row["free_workout_used"],
             row["extra_groups"],
-            )
+        )
     return None
 
-async def set_free_workout_used(user_id: int, used: bool = True):
+
+async def set_free_workout_used(user_id: int, used: bool = True) -> None:
     async with acquire_conn() as conn:
-        await conn.execute("""
+        await conn.execute(
+            """
             INSERT INTO users (user_id, free_workout_used)
             VALUES ($1, $2)
             ON CONFLICT (user_id) DO UPDATE SET
                 free_workout_used = EXCLUDED.free_workout_used
-        """, user_id, used)
+        """,
+            user_id,
+            used,
+        )
 
 
 async def get_subscription_email(user_id: int) -> str | None:
     async with acquire_conn() as conn:
         row = await conn.fetchrow("SELECT email FROM subscriptions WHERE user_id = $1", user_id)
-    
+
     return row["email"] if row else None
 
-async def set_subscription_email(user_id: int, email: str):
+
+async def set_subscription_email(user_id: int, email: str) -> None:
     await upsert_subscription(user_id, email=email)
 
-async def upsert_subscription(user_id: int, **fields):
+
+async def upsert_subscription(user_id: int, **fields: object) -> None:
     """
     Апсерт подписки с защитой:
     - если уже ACTIVE и период не истёк, запрещаем понижать статус;
     - запрещаем укорачивать current_period_end.
     """
-    now = _now_iso()
 
-    def _norm_plan(v):
+    def _norm_plan(v: object) -> str | None:
         if not v:
             return None
         v = str(v).strip().lower()
         return v if v in ("month", "year") else None
 
-    def _sanitize(existing_row, incoming: dict):
+    def _sanitize(existing_row: asyncpg.Record | None, incoming: dict) -> dict:
         if not existing_row:
             plan = _norm_plan(incoming.get("plan"))
             if plan is None and "plan" in incoming:
@@ -140,8 +162,8 @@ async def upsert_subscription(user_id: int, **fields):
             return incoming
 
         old_status = existing_row["status"]
-        old_cpe    = existing_row["current_period_end"]
-        old_plan   = (existing_row.get("plan") if isinstance(existing_row, dict) else None) or "month"
+        old_cpe = existing_row["current_period_end"]
+        old_plan = (existing_row.get("plan") if isinstance(existing_row, dict) else None) or "month"
 
         old_cpe_dt = _parse_iso(old_cpe)
         now_dt = datetime.now(timezone.utc)
@@ -184,28 +206,39 @@ async def upsert_subscription(user_id: int, **fields):
     set_clause = ", ".join([f"{c} = EXCLUDED.{c}" for c in cols] + ["updated_at = EXCLUDED.updated_at"])
 
     async with acquire_conn() as conn:
-        await conn.execute(f"""
+        await conn.execute(
+            f"""
             INSERT INTO subscriptions (user_id, {", ".join(cols)}, created_at, updated_at)
-            VALUES ($1, {", ".join(f"${i+2}" for i in range(len(vals)))}, NOW(), NOW())
+            VALUES ($1, {", ".join(f"${i + 2}" for i in range(len(vals)))}, NOW(), NOW())
             ON CONFLICT (user_id) DO UPDATE SET {set_clause}
-        """, user_id, *vals)
+        """,
+            user_id,
+            *vals,
+        )
 
 
-async def get_subscription(user_id: int):
+async def get_subscription(user_id: int) -> tuple | None:
     async with acquire_conn() as conn:
         row = await conn.fetchrow("SELECT * FROM subscriptions WHERE user_id = $1", user_id)
 
     if row:
         return (
-            row["user_id"], row["status"], row["payment_method_id"],
-            row["current_period_end"], row["next_charge_at"],
-            row["amount"], row["currency"], row["email"],
-            row["created_at"], row["updated_at"],
+            row["user_id"],
+            row["status"],
+            row["payment_method_id"],
+            row["current_period_end"],
+            row["next_charge_at"],
+            row["amount"],
+            row["currency"],
+            row["email"],
+            row["created_at"],
+            row["updated_at"],
             row["plan"],
-            row["retry_attempts"],  
+            row["retry_attempts"],
             row["precharge_notified"],
         )
     return None
+
 
 async def list_precharge_subscriptions() -> list[int]:
     """
@@ -237,17 +270,25 @@ async def list_precharge_subscriptions() -> list[int]:
 async def mark_precharge_sent(user_id: int) -> None:
     async with acquire_conn() as conn:
         await conn.execute(
-            "UPDATE subscriptions SET precharge_notified = TRUE, updated_at = NOW() WHERE user_id = $1",
-            user_id
+            "UPDATE subscriptions SET precharge_notified = TRUE, updated_at = NOW() WHERE user_id = $1", user_id
         )
 
 
-async def insert_payment(user_id: int, payment_id: str, amount: int, currency: str, status: str, raw_text: str):
+async def insert_payment(user_id: int, payment_id: str, amount: int, currency: str, status: str, raw_text: str) -> None:
     async with acquire_conn() as conn:
-        await conn.execute("""
+        await conn.execute(
+            """
             INSERT INTO payments (user_id, payment_id, amount, currency, status, created_at, raw)
             VALUES ($1, $2, $3, $4, $5, NOW(), $6)
-        """, user_id, payment_id, amount, currency, status, raw_text)
+        """,
+            user_id,
+            payment_id,
+            amount,
+            currency,
+            status,
+            raw_text,
+        )
+
 
 async def mark_payment_applied(payment_id: str) -> bool:
     """
@@ -256,34 +297,54 @@ async def mark_payment_applied(payment_id: str) -> bool:
     """
     async with acquire_conn() as conn:
         row = await conn.fetchrow(
-            "UPDATE payments SET applied_at = NOW() "
-            "WHERE payment_id = $1 AND applied_at IS NULL "
-            "RETURNING applied_at",
-            payment_id
+            "UPDATE payments SET applied_at = NOW() WHERE payment_id = $1 AND applied_at IS NULL RETURNING applied_at",
+            payment_id,
         )
         return bool(row)  # True -> мы первые отметили платёж как применённый
-  
+
 
 async def upsert_payment_status(
-    user_id: int, payment_id: str, amount: int, currency: str,
-    status: str, raw_text: str = "{}", confirmation_url: str | None = None
+    user_id: int,
+    payment_id: str,
+    amount: int,
+    currency: str,
+    status: str,
+    raw_text: str = "{}",
+    confirmation_url: str | None = None,
 ):
     """
     Обновляет запись о платеже (по payment_id), а если её нет — вставляет новую.
     Также корректно сохраняет confirmation_url.
     """
     async with acquire_conn() as conn:
-        row = await conn.fetchrow("""
+        row = await conn.fetchrow(
+            """
             UPDATE payments
             SET status = $1, amount = $2, currency = $3, raw = $4, confirmation_url = $5
             WHERE payment_id = $6
         RETURNING id
-        """, status, amount, currency, raw_text, confirmation_url, payment_id)
+        """,
+            status,
+            amount,
+            currency,
+            raw_text,
+            confirmation_url,
+            payment_id,
+        )
         if not row:
-            await conn.execute("""
+            await conn.execute(
+                """
                 INSERT INTO payments (user_id, payment_id, amount, currency, status, created_at, raw, confirmation_url)
                 VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7)
-            """, user_id, payment_id, amount, currency, status, raw_text, confirmation_url)
+            """,
+                user_id,
+                payment_id,
+                amount,
+                currency,
+                status,
+                raw_text,
+                confirmation_url,
+            )
 
 
 async def get_payment_confirmation_url(payment_id: str) -> str | None:
@@ -291,12 +352,14 @@ async def get_payment_confirmation_url(payment_id: str) -> str | None:
         row = await conn.fetchrow("SELECT confirmation_url FROM payments WHERE payment_id = $1", payment_id)
 
     return row["confirmation_url"] if row else None
-    
+
+
 async def get_user_id_by_payment_id(payment_id: str) -> int | None:
     async with acquire_conn() as conn:
         row = await conn.fetchrow("SELECT user_id FROM payments WHERE payment_id = $1", payment_id)
-    
+
     return row["user_id"] if row else None
+
 
 async def get_last_pending_payment_id(user_id: int) -> str | None:
     """
@@ -304,15 +367,20 @@ async def get_last_pending_payment_id(user_id: int) -> str | None:
     """
     pending_states = ("pending", "waiting_for_capture")
     async with acquire_conn() as conn:
-        row = await conn.fetchrow("""
+        row = await conn.fetchrow(
+            """
             SELECT payment_id
             FROM payments
             WHERE user_id = $1 AND status = ANY($2::text[])
             ORDER BY created_at DESC
             LIMIT 1
-        """, user_id, list(pending_states))
-    
+        """,
+            user_id,
+            list(pending_states),
+        )
+
     return row["payment_id"] if row else None
+
 
 async def has_active_promocodes() -> bool:
     async with acquire_conn() as conn:
@@ -325,19 +393,23 @@ async def has_active_promocodes() -> bool:
         """)
     return bool(row)
 
-async def get_active_promocode(code: str):
+
+async def get_active_promocode(code: str) -> tuple | None:
     norm = (code or "").strip()
     if not norm:
         return None
     async with acquire_conn() as conn:
-        row = await conn.fetchrow("""
+        row = await conn.fetchrow(
+            """
             SELECT code, title, starts_at, expires_at, price_month_cents, price_year_cents, created_at
             FROM promocodes
             WHERE lower(code) = lower($1)
               AND (starts_at IS NULL OR starts_at <= now())
               AND (expires_at IS NULL OR expires_at > now())
             LIMIT 1
-        """, norm)
+        """,
+            norm,
+        )
     if not row:
         return None
     return (
@@ -349,8 +421,9 @@ async def get_active_promocode(code: str):
         row["price_year_cents"],
         row["created_at"],
     )
-    
-async def list_due_subscriptions(now_dt: datetime):
+
+
+async def list_due_subscriptions(now_dt: datetime) -> list[int]:
     """
     Возвращает список user_id, кому пора списывать.
     now_dt — aware datetime (UTC).
@@ -358,16 +431,20 @@ async def list_due_subscriptions(now_dt: datetime):
     async with acquire_conn() as conn:
         # для TIMESTAMP без таймзоны — передаём naive UTC
         pg_now = now_dt.astimezone(timezone.utc).replace(tzinfo=None)
-        rows = await conn.fetch("""
+        rows = await conn.fetch(
+            """
             SELECT user_id
             FROM subscriptions
             WHERE status = 'active'
             AND payment_method_id IS NOT NULL
             AND next_charge_at IS NOT NULL
             AND next_charge_at <= $1
-        """, pg_now)
+        """,
+            pg_now,
+        )
         return [r["user_id"] for r in rows]
-    
+
+
 async def cancel_other_pendings(user_id: int, keep_payment_id: str) -> int:
     """
     Локально помечает ВСЕ другие платежи пользователя со статусом pending/waiting_for_capture
@@ -382,11 +459,13 @@ async def cancel_other_pendings(user_id: int, keep_payment_id: str) -> int:
             AND payment_id <> $2
             AND status = ANY($3::text[])
             """,
-            user_id, keep_payment_id, ['pending','waiting_for_capture']
+            user_id,
+            keep_payment_id,
+            ["pending", "waiting_for_capture"],
         )
         return int(res.split()[-1])  # 'UPDATE <n>'
 
-    
+
 def _ensure_eqdnf(v) -> list[list[str]]:
     """
     Возвращает list[list[str]] независимо от того, пришло ли это
@@ -442,26 +521,29 @@ async def get_all_exercises() -> list[dict]:
                 muscle_group, reps_note, video_url
             FROM exercises
         """)
-    
+
     # pg: Record с уже «нормальными» типами (TEXT[], JSONB, …)
     result = []
     for r in rows:
-        result.append({
-            "name":               r["name"],
-            "levels":             list(r["levels"] or []),
-            "equipment":          list(r["equipment"] or []),
-            "equipment_dnf":      _ensure_eqdnf(r["equipment_dnf"] or []),
-            "allowed_limitations":list(r["allowed_limitations"] or []),
-            "muscle_group":       r["muscle_group"],
-            "reps_note":          r["reps_note"] or "",
-            "video_url":          r["video_url"] or "",
-        })
+        result.append(
+            {
+                "name": r["name"],
+                "levels": list(r["levels"] or []),
+                "equipment": list(r["equipment"] or []),
+                "equipment_dnf": _ensure_eqdnf(r["equipment_dnf"] or []),
+                "allowed_limitations": list(r["allowed_limitations"] or []),
+                "muscle_group": r["muscle_group"],
+                "reps_note": r["reps_note"] or "",
+                "video_url": r["video_url"] or "",
+            }
+        )
     return result
 
 
 # -------- init all --------
 
-async def init_db():
+
+async def init_db() -> None:
     global pool
     p = pool
     if p is None:
@@ -476,6 +558,7 @@ async def init_db():
         await _init_exercises_pg(conn)
         await _init_promocodes_pg(conn)
 
+
 async def close_db() -> None:
     """
     Закрыть пул соединений при остановке приложения.
@@ -485,7 +568,8 @@ async def close_db() -> None:
         await pool.close()
         pool = None
 
-async def _init_users_pg(conn):
+
+async def _init_users_pg(conn: asyncpg.Connection) -> None:
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id BIGINT PRIMARY KEY,
@@ -499,7 +583,7 @@ async def _init_users_pg(conn):
     """)
 
 
-async def _init_subscriptions_pg(conn):
+async def _init_subscriptions_pg(conn: asyncpg.Connection) -> None:
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
             user_id BIGINT PRIMARY KEY,
@@ -509,7 +593,7 @@ async def _init_subscriptions_pg(conn):
             next_charge_at TIMESTAMP,
             amount INTEGER,
             currency TEXT,
-            email TEXT, 
+            email TEXT,
             plan TEXT NOT NULL DEFAULT 'month',
             retry_attempts INTEGER NOT NULL DEFAULT 0,
             precharge_notified BOOLEAN NOT NULL DEFAULT FALSE,
@@ -518,7 +602,8 @@ async def _init_subscriptions_pg(conn):
         )
     """)
 
-async def _init_payments_pg(conn):
+
+async def _init_payments_pg(conn: asyncpg.Connection) -> None:
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS payments (
             id SERIAL PRIMARY KEY,
@@ -535,7 +620,8 @@ async def _init_payments_pg(conn):
     """)
     await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_payment_id ON payments(payment_id)")
 
-async def _init_exercises_pg(conn):
+
+async def _init_exercises_pg(conn: asyncpg.Connection) -> None:
     # Таблица "exercises": массивы и jsonb с дефолтами — как ожидает генератор
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS exercises (
@@ -557,7 +643,8 @@ async def _init_exercises_pg(conn):
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_eqdnf      ON exercises USING GIN (equipment_dnf);")
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_ex_group      ON exercises (muscle_group);")
 
-async def _init_promocodes_pg(conn):
+
+async def _init_promocodes_pg(conn: asyncpg.Connection) -> None:
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS promocodes (
             code TEXT PRIMARY KEY,

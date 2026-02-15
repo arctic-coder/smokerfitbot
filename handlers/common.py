@@ -1,25 +1,39 @@
 # handlers/common.py
 import os
-from aiogram import Dispatcher, types
-from aiogram.dispatcher import FSMContext
 
-from keyboards import kb_payment_pending, start_kb
-from texts import (
-    HELP, START_MESSAGE, NO_PENDING_PAYMENTS, PAYMENT_CHECK_FAILED,
-    PAYMENT_SUCCEEDED, PAYMENT_PENDING, PAYMENT_FAILED,
-)
+from aiogram import Router, types
+from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+
 from billing.service import check_and_activate
 from db import get_last_pending_payment_id, get_payment_confirmation_url
+from keyboards import kb_payment_pending, start_kb
+from texts import (
+    HELP,
+    NO_PENDING_PAYMENTS,
+    PAYMENT_CHECK_FAILED,
+    PAYMENT_FAILED,
+    PAYMENT_PENDING,
+    PAYMENT_SUCCEEDED,
+    START_MESSAGE,
+)
 
 ADMIN_ID: int = int(os.getenv("ADMIN_ID", "0"))
 
-async def help_cmd(message: types.Message, state: FSMContext) -> None:
-        await message.answer(HELP)
+common_router = Router()
 
-async def start_cmd(message: types.Message, state: FSMContext) -> None:
-    """Приветствие и deep-link 'payment_success': /start payment_success"""
-    await state.finish()
-    payload = message.get_args()
+
+async def send_start_screen(message: types.Message, state: FSMContext) -> None:
+    """Shared helper: clear state and show the start screen with keyboard."""
+    await state.clear()
+    await message.answer(START_MESSAGE, parse_mode="HTML", disable_web_page_preview=True, reply_markup=start_kb)
+
+
+@common_router.message(CommandStart(), StateFilter("*"))
+async def start_cmd(message: types.Message, state: FSMContext, command: CommandStart) -> None:
+    """Greeting and deep-link 'payment_success': /start payment_success"""
+    await state.clear()
+    payload = command.args
 
     if payload == "payment_success":
         user_id = message.from_user.id
@@ -44,6 +58,7 @@ async def start_cmd(message: types.Message, state: FSMContext) -> None:
 
     await message.answer(START_MESSAGE, parse_mode="HTML", disable_web_page_preview=True, reply_markup=start_kb)
 
-def register_common_handlers(dp: Dispatcher) -> None:
-    dp.register_message_handler(start_cmd, commands="start", state="*")
-    dp.register_message_handler(help_cmd, commands="help", state="*")
+
+@common_router.message(Command("help"), StateFilter("*"))
+async def help_cmd(message: types.Message) -> None:
+    await message.answer(HELP)

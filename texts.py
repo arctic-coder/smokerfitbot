@@ -1,26 +1,32 @@
 """
 texts.py — все человеко-читаемые строки и подписи на кнопках
 """
+
 import os
+
 SUBSCRIPTION_PRICE_MONTH = int(os.getenv("SUBSCRIPTION_PRICE_MONTH", "39900"))
 SUBSCRIPTION_PRICE_YEAR = int(os.getenv("SUBSCRIPTION_PRICE_YEAR", "299000"))
 
+
 def _fmt_rub(cents: int) -> str:
-    return "{:.2f}".format(cents / 100)
+    return f"{cents / 100:.2f}"
+
 
 def start_sub_month_label(amount_cents: int | None = None) -> str:
     value = _fmt_rub(amount_cents if amount_cents is not None else SUBSCRIPTION_PRICE_MONTH)
     return f"Оформить подписку на месяц {value} ₽"
 
+
 def start_sub_year_label(amount_cents: int | None = None) -> str:
     value = _fmt_rub(amount_cents if amount_cents is not None else SUBSCRIPTION_PRICE_YEAR)
     return f"Оформить подписку на год {value} ₽"
 
+
 AMOUNT_MONTH = _fmt_rub(SUBSCRIPTION_PRICE_MONTH)
-AMOUNT_YEAR  = _fmt_rub(SUBSCRIPTION_PRICE_YEAR)
+AMOUNT_YEAR = _fmt_rub(SUBSCRIPTION_PRICE_YEAR)
 
 BTN_START_SUB_MONTH = f"Оформить подписку на месяц {AMOUNT_MONTH} ₽"
-BTN_START_SUB_YEAR  = f"Оформить подписку на год {AMOUNT_YEAR} ₽"
+BTN_START_SUB_YEAR = f"Оформить подписку на год {AMOUNT_YEAR} ₽"
 
 # --- КНОПКИ ---
 BTN_FILL_FORM = "Заполнить анкету заново"
@@ -127,22 +133,24 @@ EQUIPMENT = [
 # --- СООБЩЕНИЯ (общие) ---
 START_MESSAGE = (
     "Привет, это конструктор силовых тренировок от “Физкультуры курильщика”!\n\n"
-    "Держите <a href=\"https://telegra.ph/Kak-polzovatsya-Smokerfitbot-10-22\">памятку</a>. Если вы генерируете тренировку впервые, обязательно прочтите ее, прежде чем начинать, - там написано, что вообще с этой тренировкой делать и как не перестараться.\n\n"
+    'Держите <a href="https://telegra.ph/Kak-polzovatsya-Smokerfitbot-10-22">памятку</a>. Если вы генерируете тренировку впервые, обязательно прочтите ее, прежде чем начинать, - там написано, что вообще с этой тренировкой делать и как не перестараться.\n\n'
     "<b>Ну и поехали!</b>"
 )
 INVALID_CHOICE = "Пожалуйста, выбери из предложенных кнопок."
 PROFILE_NOT_FOUND = "Анкета не найдена. Пожалуйста, заполните её заново."
 
 # --- АНКЕТА ---
-LEVEL_PROMPT = ("Какой у вас опыт регулярных занятий силовыми? \n\n"
-                "- Новичок (прям совсем)\n"
-                "- Середнячок (от нескольких месяцев до года)\n"
-                "- Продолжающий (больше года)\n"
+LEVEL_PROMPT = (
+    "Какой у вас опыт регулярных занятий силовыми? \n\n"
+    "- Новичок (прям совсем)\n"
+    "- Середнячок (от нескольких месяцев до года)\n"
+    "- Продолжающий (больше года)\n"
 )
 LIMITATIONS_PROMPT = "Какие у вас есть медицинские ограничения? (Нажмите “Готово”, когда выберете все)"
-EQUIPMENT_PROMPT = ("Какой инвентарь у вас есть? (Выберите все нужные варианты и нажмите “Готово”).\n"
-                    "Если непонятно, что имеется в виду, <a href=\"https://telegra.ph/Inventar-10-15\">вот здесь</a> есть пояснения"
-                    )
+EQUIPMENT_PROMPT = (
+    "Какой инвентарь у вас есть? (Выберите все нужные варианты и нажмите “Готово”).\n"
+    'Если непонятно, что имеется в виду, <a href="https://telegra.ph/Inventar-10-15">вот здесь</a> есть пояснения'
+)
 DURATION_PROMPT = "Сколько времени у вас есть на тренировку?"
 EXTRAS_PROMPT = (
     "Вы хотите помимо базовых упражнений на спину, грудь, низ и живот добавить что-то еще?\n"
@@ -152,15 +160,12 @@ EXTRAS_PROMPT = (
 WORKOUT_STARTING = "Отлично, генерирую тренировку!..."
 WORKOUT_EMPTY = "К сожалению, не удалось подобрать подходящие упражнения 😢"
 WORKOUT_HEADER = "Вот она:"
-WORKOUT_FOOTER = "Если что-то непонятно, загляните еще раз в <a href=\"https://telegra.ph/Kak-polzovatsya-Smokerfitbot-10-22\">памятку</a>. А про инвентарь все написано <a href=\"https://telegra.ph/Inventar-10-15\">здесь</a>."
+WORKOUT_FOOTER = 'Если что-то непонятно, загляните еще раз в <a href="https://telegra.ph/Kak-polzovatsya-Smokerfitbot-10-22">памятку</a>. А про инвентарь все написано <a href="https://telegra.ph/Inventar-10-15">здесь</a>.'
 
 # --- ПОДПИСКА / ПЛАТЕЖИ ---
 SUB_REQUIRED = "Вы уже использовали бесплатную тренировку.\nТеперь можно выбрать подписку с ежегодной или ежемесячной оплатой. Отменить ее можно будет в любой момент командой /cancel"
 
-SUB_ALREADY_ACTIVE = (
-    "У вас уже активная подписка{cancelled} ✅\nОплачено до: {cpe}\n\n"
-    "Команда: /status"
-)
+SUB_ALREADY_ACTIVE = "У вас уже активная подписка{cancelled} ✅\nОплачено до: {cpe}\n\nКоманда: /status"
 
 EMAIL_PROMPT = "Введите e-mail для отправки чека:"
 EMAIL_INVALID = "Неверный e-mail. Введите корректный адрес:"
@@ -196,7 +201,7 @@ PROMO_INVALID = "Промокод не найден или неактивен. �
 PROMO_APPLIED = "Промокод применён. Выберите план с промо-ценой."
 
 # --- Уведомления автосписаний ---
-RECURRING_PRECHARGE    = "Напоминание: завтра спишем продление подписки."
-RECURRING_SUCCESS      = "Подписка продлена успешно ✅"
+RECURRING_PRECHARGE = "Напоминание: завтра спишем продление подписки."
+RECURRING_SUCCESS = "Подписка продлена успешно ✅"
 RECURRING_FAILED_RETRY = "Не удалось продлить подписку ❌. Повторим попытку завтра."
 RECURRING_FAILED_RETRY_LAST = "Не удалось продлить подписку ❌. Вы можете оформить подписку заново /subscribe."

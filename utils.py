@@ -1,16 +1,20 @@
 # utils.py
-import random
-from typing import Iterable
-from db import get_all_exercises
-from texts import BASE_GROUPS, BTN_15_20, BTN_35_45, BTN_5_10, BTN_EQUIP_NONE, BTN_LIMIT_NO, EXTRA_BUTTON_TO_GROUP
 import logging
+import random
+from collections.abc import Iterable
+
+from db import get_all_exercises
+from texts import BASE_GROUPS, BTN_5_10, BTN_15_20, BTN_35_45, BTN_EQUIP_NONE, BTN_LIMIT_NO, EXTRA_BUTTON_TO_GROUP
+
 log = logging.getLogger("workout")
 
 # ---- фильтры совместимости ----
 
+
 def _level_ok(user_level: str, ex_levels: list[str]) -> bool:
     # если у упражнения уровни не заданы — подходит всем
     return not ex_levels or (user_level in ex_levels)
+
 
 def _limitations_ok(user_limits: list[str], ex_allowed: list[str]) -> bool:
     # «Нет ограничений» или пусто — всё ок
@@ -20,11 +24,13 @@ def _limitations_ok(user_limits: list[str], ex_allowed: list[str]) -> bool:
     if not ex_allowed:
         return True
     # все ограничения пользователя должны быть разрешены упражнением
-    return all(l in ex_allowed for l in user_limits)
+    return all(lim in ex_allowed for lim in user_limits)
+
 
 # utils.py
 
-def _equipment_options_ok(user_eq: list[str], options: list) -> bool:
+
+def _equipment_options_ok(user_eq: list[str], options: list[list[str]]) -> bool:
     """
     options — list[list[str]] (варианты наборов инвентаря).
     True, если есть опция, целиком покрываемая пользовательским набором.
@@ -46,6 +52,7 @@ def _equipment_options_ok(user_eq: list[str], options: list) -> bool:
 
 # ---- сборка плана ----
 
+
 def _pick_one(pool: list[dict], used_names: set[str]) -> dict | None:
     """Берём случайное упражнение из группы, желательно без повторов по имени."""
     candidates = [ex for ex in pool if ex["name"] not in used_names]
@@ -53,19 +60,23 @@ def _pick_one(pool: list[dict], used_names: set[str]) -> dict | None:
         candidates = pool[:]  # если всё уже использовали — допускаем повтор
     return random.choice(candidates) if candidates else None
 
-def _to_items(ex_list: Iterable[dict], sets: int) -> list[dict]:
-    items = []
+
+def _to_items(ex_list: Iterable[dict | None], sets: int) -> list[dict]:
+    items: list[dict] = []
     for ex in ex_list:
         if not ex:
             continue
-        items.append({
-            "name":  ex["name"],
-            "group": ex.get("muscle_group") or "",
-            "sets":  sets,
-            "reps":  ex.get("reps_note") or "10",
-            "link":  ex.get("video_url") or "",
-        })
+        items.append(
+            {
+                "name": ex["name"],
+                "group": ex.get("muscle_group") or "",
+                "sets": sets,
+                "reps": ex.get("reps_note") or "10",
+                "link": ex.get("video_url") or "",
+            }
+        )
     return items
+
 
 # замени на это
 async def generate_workout(user_data: dict) -> list[dict]:
@@ -74,15 +85,16 @@ async def generate_workout(user_data: dict) -> list[dict]:
     Вход: level:str, limitations:list[str], equipment:list[str], duration_minutes:str, (опц.) extras:list[str]
     Выход: список шагов: {name, group, sets, reps, link}
     """
-    level  = str(user_data.get("level", "") or "")
+    level = str(user_data.get("level", "") or "")
     limits = list(user_data.get("limitations") or [])
-    equip  = list(user_data.get("equipment") or [])
-    dur    = str(user_data.get("duration_minutes", "") or "")
+    equip = list(user_data.get("equipment") or [])
+    dur = str(user_data.get("duration_minutes", "") or "")
     extras_raw = list(user_data.get("extras") or [])
 
     # входные данные
-    log.debug("generate_workout: input level=%r limits=%r equip=%r dur=%r extras=%r",
-              level, limits, equip, dur, extras_raw)
+    log.debug(
+        "generate_workout: input level=%r limits=%r equip=%r dur=%r extras=%r", level, limits, equip, dur, extras_raw
+    )
 
     # 1) Загружаем упражнения
     all_ex = await get_all_exercises()

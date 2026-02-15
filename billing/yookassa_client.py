@@ -1,17 +1,21 @@
 # yookassa_client.py
 import asyncio
-import os, uuid
-import json, copy, re, logging
-from requests.exceptions import Timeout, ConnectionError, RequestException, HTTPError
+import contextlib
+import copy
+import json
+import logging
+import os
+import uuid
 
-from yookassa import Configuration, Payment, Webhook
+from requests.exceptions import ConnectionError, HTTPError, RequestException, Timeout
+from yookassa import Configuration, Payment
 from yookassa.domain.exceptions import ApiError
 
 # ==== Константы из окружения ====
 SUBSCRIPTION_PRICE_MONTH = int(os.getenv("SUBSCRIPTION_PRICE_MONTH", "39900"))
-SUBSCRIPTION_PRICE_YEAR  = int(os.getenv("SUBSCRIPTION_PRICE_YEAR",  "299000"))
+SUBSCRIPTION_PRICE_YEAR = int(os.getenv("SUBSCRIPTION_PRICE_YEAR", "299000"))
 SUBSCRIPTION_TITLE_MONTH = "Подписка «Физкультура курильщика» (1 месяц)"
-SUBSCRIPTION_TITLE_YEAR  = "Подписка «Физкультура курильщика» (1 год)"
+SUBSCRIPTION_TITLE_YEAR = "Подписка «Физкультура курильщика» (1 год)"
 SUBSCRIPTION_CURRENCY = os.getenv("SUBSCRIPTION_CURRENCY", "RUB")
 RETURN_URL = os.getenv("RETURN_URL", "https://t.me/")
 
@@ -27,8 +31,10 @@ log = logging.getLogger("billing.yookassa")
 class YookassaNetworkError(Exception):
     pass
 
+
 def _fmt(cents: int) -> str:
-    return "{:.2f}".format(cents / 100)
+    return f"{cents / 100:.2f}"
+
 
 def amount_for(plan: str, override_cents: int | None = None, title_override: str | None = None) -> tuple[int, str, str]:
     if plan == "year":
@@ -40,6 +46,7 @@ def amount_for(plan: str, override_cents: int | None = None, title_override: str
     if title_override:
         title = title_override
     return cents, _fmt(cents), title
+
 
 def _log_requests_error(prefix: str, exc: Exception):
     """
@@ -68,17 +75,15 @@ def _mask_email(email: str | None) -> str | None:
     if not email or "@" not in email:
         return email
     name, domain = email.split("@", 1)
-    if len(name) <= 2:
-        masked = "***"
-    else:
-        masked = f"{name[0]}***{name[-1]}"
+    masked = "***" if len(name) <= 2 else f"{name[0]}***{name[-1]}"
     return f"{masked}@{domain}"
+
 
 def _redact_payload(d: dict) -> dict:
     """Глубокая копия payload с маскировкой чувствительных полей."""
     red = copy.deepcopy(d)
     try:
-        cust = (((red.get("receipt") or {}).get("customer")) or {})
+        cust = ((red.get("receipt") or {}).get("customer")) or {}
         if "email" in cust:
             cust["email"] = _mask_email(cust["email"])
     except Exception:
@@ -90,6 +95,7 @@ def _redact_payload(d: dict) -> dict:
     except Exception:
         pass
     return red
+
 
 def _ensure_config():
     """Подтягивает креды из ENV перед каждым запросом."""
@@ -109,12 +115,14 @@ def _make_receipt(email: str | None, amount_value: str, title: str):
     customer = {"email": email}
     receipt = {
         "customer": customer,
-        "items": [{
-            "description": title,
-            "quantity": "1.00",
-            "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
-            "vat_code": VAT_CODE,
-        }]
+        "items": [
+            {
+                "description": title,
+                "quantity": "1.00",
+                "amount": {"value": amount_value, "currency": SUBSCRIPTION_CURRENCY},
+                "vat_code": VAT_CODE,
+            }
+        ],
     }
     return receipt
 
@@ -123,8 +131,9 @@ def _make_receipt(email: str | None, amount_value: str, title: str):
 async def _payment_create_async(payload: dict, idem: str):
     """POST /v3/payments с логированием запроса/ответа/ошибок (включая тело 4xx)."""
     _ensure_config()
-    log.debug("YK request Payment.create: idem=%s payload=%s",
-              idem, json.dumps(_redact_payload(payload), ensure_ascii=False))
+    log.debug(
+        "YK request Payment.create: idem=%s payload=%s", idem, json.dumps(_redact_payload(payload), ensure_ascii=False)
+    )
     try:
         p = await asyncio.to_thread(Payment.create, payload, idem)
         status = getattr(p, "status", None)
@@ -144,8 +153,16 @@ async def _payment_create_async(payload: dict, idem: str):
         code = getattr(e, "code", e.__class__.__name__)
         msg = getattr(e, "message", str(e))
         params = getattr(e, "params", None)
-        log.error("YK API error Payment.create: http=%s request_id=%s code=%s message=%s params=%s idem=%s payload=%s",
-                  http, req_id, code, msg, params, idem, json.dumps(_redact_payload(payload), ensure_ascii=False))
+        log.error(
+            "YK API error Payment.create: http=%s request_id=%s code=%s message=%s params=%s idem=%s payload=%s",
+            http,
+            req_id,
+            code,
+            msg,
+            params,
+            idem,
+            json.dumps(_redact_payload(payload), ensure_ascii=False),
+        )
         raise
 
     except HTTPError as e:  # важно: до RequestException
@@ -154,14 +171,14 @@ async def _payment_create_async(payload: dict, idem: str):
 
     except Timeout:
         log.error("YK network timeout on Payment.create idem=%s", idem)
-        raise YookassaNetworkError("ЮKassa: время ожидания истекло")
+        raise YookassaNetworkError("ЮKassa: время ожидания истекло") from None
     except ConnectionError:
         log.error("YK connection error on Payment.create idem=%s", idem)
-        raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa")
+        raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa") from None
     except RequestException as e:
         # сюда падают прочие ошибки requests (включая 4xx/5xx, если SDK не преобразовал в ApiError)
         _log_requests_error("YK generic network error on Payment.create", e)
-        raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
+        raise YookassaNetworkError("Сервис ЮKassa временно недоступен") from e
 
 
 async def _payment_find_async(payment_id: str):
@@ -171,10 +188,8 @@ async def _payment_find_async(payment_id: str):
     try:
         p = await asyncio.to_thread(Payment.find_one, payment_id)
         log.info("YK response Payment.find_one: id=%s status=%s", getattr(p, "id", None), getattr(p, "status", None))
-        try:
+        with contextlib.suppress(Exception):
             log.debug("YK response Payment.find_one: body=%s", p.json())
-        except Exception:
-            pass
         return p
 
     except ApiError as e:
@@ -183,21 +198,29 @@ async def _payment_find_async(payment_id: str):
         code = getattr(e, "code", e.__class__.__name__)
         msg = getattr(e, "message", str(e))
         params = getattr(e, "params", None)
-        log.error("YK API error Payment.find_one: http=%s request_id=%s code=%s message=%s params=%s payment_id=%s",
-                  http, req_id, code, msg, params, payment_id)
+        log.error(
+            "YK API error Payment.find_one: http=%s request_id=%s code=%s message=%s params=%s payment_id=%s",
+            http,
+            req_id,
+            code,
+            msg,
+            params,
+            payment_id,
+        )
         raise
     except HTTPError as e:
         _log_requests_error("YK HTTP error Payment.find_one", e)
         raise
     except Timeout:
         log.error("YK network timeout on Payment.find_one id=%s", payment_id)
-        raise YookassaNetworkError("ЮKassa: время ожидания истекло")
+        raise YookassaNetworkError("ЮKassa: время ожидания истекло") from None
     except ConnectionError:
         log.error("YK connection error on Payment.find_one id=%s", payment_id)
-        raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa")
+        raise YookassaNetworkError("ЮKassa: нет соединения с ЮKassa") from None
     except RequestException as e:
         _log_requests_error("YK generic network error on Payment.find_one", e)
-        raise YookassaNetworkError("Сервис ЮKassa временно недоступен")
+        raise YookassaNetworkError("Сервис ЮKassa временно недоступен") from e
+
 
 # ==== ВЫСОКОУРОВНЕВЫЕ ОБЁРТКИ ДЛЯ ПРИЛОЖЕНИЯ ====
 async def create_checkout_payment(
@@ -238,12 +261,13 @@ async def create_checkout_payment(
     url = getattr(conf_obj, "confirmation_url", None) if conf_obj else None
     return p.id, url
 
+
 async def create_recurring_payment(payment_method_id: str, user_id: int, email: str | None, plan: str):
     """
     Рекуррент по сохранённому способу оплаты (без редиректа).
     Возвращает объект Payment.
     """
-    cents, value, title = amount_for(plan)
+    _cents, value, title = amount_for(plan)
     payload = {
         "amount": {"value": value, "currency": SUBSCRIPTION_CURRENCY},
         "payment_method_id": payment_method_id,
@@ -254,6 +278,7 @@ async def create_recurring_payment(payment_method_id: str, user_id: int, email: 
     }
     idem = str(uuid.uuid4())
     return await _payment_create_async(payload, idem)
+
 
 async def get_payment(payment_id: str):
     """Обёртка для поиска платежа по id."""

@@ -1,21 +1,32 @@
-from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable, Optional, Dict, Any
-from db import (
-    upsert_subscription, upsert_payment_status, get_last_pending_payment_id,
-    get_payment_confirmation_url, get_subscription, mark_payment_applied, cancel_other_pendings,
-    list_precharge_subscriptions, mark_precharge_sent
-)
-from billing.yookassa_client import amount_for, create_checkout_payment, get_payment, create_recurring_payment
 import logging
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from billing.yookassa_client import amount_for, create_checkout_payment, create_recurring_payment, get_payment
+from db import (
+    cancel_other_pendings,
+    get_last_pending_payment_id,
+    get_payment_confirmation_url,
+    get_subscription,
+    list_precharge_subscriptions,
+    mark_payment_applied,
+    mark_precharge_sent,
+    upsert_payment_status,
+    upsert_subscription,
+)
+
 log = logging.getLogger("billing.service")
 # Async-колбэк уведомлений: (user_id, kind, ctx) -> await None
-Notifier = Optional[Callable[[int, str, Dict[str, Any]], Awaitable[None]]]
+Notifier = Callable[[int, str, dict[str, Any]], Awaitable[None]] | None
+
 
 def _add_months(dt: datetime, n: int) -> datetime:
     cur = dt
     for _ in range(n):
-        cur = _next_month(cur) 
+        cur = _next_month(cur)
     return cur
+
 
 def _next_month(dt: datetime) -> datetime:
     month = dt.month + 1
@@ -26,7 +37,8 @@ def _next_month(dt: datetime) -> datetime:
     except ValueError:
         return dt.replace(year=year, month=month, day=28)
 
-def _extract_email_from_subscription_row(sub) -> str | None:
+
+def _extract_email_from_subscription_row(sub: tuple | None) -> str | None:
     """
     Извлекаем email из кортежа подписки без жёсткой завязки на позицию поля.
     Возвращает None, если email не найден.
@@ -39,7 +51,9 @@ def _extract_email_from_subscription_row(sub) -> str | None:
     return None
 
 
-def _calc_renewal_dates(current_period_end, now_utc: datetime, months: int):
+def _calc_renewal_dates(
+    current_period_end: str | datetime | None, now_utc: datetime, months: int
+) -> tuple[datetime, datetime]:
     """
     Возвращает (new_cpe, next_charge_at):
     - если текущий период ещё активен, считаем от current_period_end;
@@ -56,25 +70,23 @@ def _calc_renewal_dates(current_period_end, now_utc: datetime, months: int):
         cpe_dt = current_period_end
 
     if cpe_dt is not None:
-        if cpe_dt.tzinfo is None:
-            cpe_dt = cpe_dt.replace(tzinfo=timezone.utc)
-        else:
-            cpe_dt = cpe_dt.astimezone(timezone.utc)
+        cpe_dt = cpe_dt.replace(tzinfo=timezone.utc) if cpe_dt.tzinfo is None else cpe_dt.astimezone(timezone.utc)
 
     anchor = cpe_dt if (cpe_dt and cpe_dt > now_utc) else now_utc
     new_cpe = _add_months(anchor, months)
     next_charge_at = new_cpe - timedelta(days=1)
     return new_cpe, next_charge_at
 
-def _get_confirmation_url(p):
+
+def _get_confirmation_url(p: object) -> str | None:
     try:
         return getattr(getattr(p, "confirmation", None), "confirmation_url", None)
     except Exception:
         return None
-    
+
 
 # service.py
-async def check_and_activate(user_id: int, payment_id: str):
+async def check_and_activate(user_id: int, payment_id: str) -> str:
     """
     Тянет платёж из ЮKassa, синхронизирует payments.
     Если платёж успешен — пытается атомарно пометить его applied_at.
@@ -85,8 +97,13 @@ async def check_and_activate(user_id: int, payment_id: str):
     # 1) Синхронизируем запись платежа у себя
     amount_int = int(round(float(p.amount.value) * 100))
     await upsert_payment_status(
-        user_id, payment_id, amount_int, p.amount.currency, p.status,
-        raw_text=p.json(), confirmation_url=_get_confirmation_url(p)
+        user_id,
+        payment_id,
+        amount_int,
+        p.amount.currency,
+        p.status,
+        raw_text=p.json(),
+        confirmation_url=_get_confirmation_url(p),
     )
 
     # 2) Ветвление по статусу
@@ -113,7 +130,11 @@ async def check_and_activate(user_id: int, payment_id: str):
         await upsert_subscription(
             user_id,
             status="active",
-            payment_method_id=(p.payment_method.id if getattr(getattr(p, "payment_method", None), "saved", False) else (sub[2] if sub else None)),
+            payment_method_id=(
+                p.payment_method.id
+                if getattr(getattr(p, "payment_method", None), "saved", False)
+                else (sub[2] if sub else None)
+            ),
             current_period_end=new_cpe,
             next_charge_at=next_charge_at,
             retry_attempts=0,
@@ -132,13 +153,12 @@ async def check_and_activate(user_id: int, payment_id: str):
     return "failed"
 
 
-
-async def cancel_subscription(user_id: int):
+async def cancel_subscription(user_id: int) -> None:
     # помечаем как cancelled, но период не трогаем
     await upsert_subscription(user_id, status="cancelled")
 
 
-def is_active(sub_row, include_cancelled: bool = True) -> bool:
+def is_active(sub_row: tuple | None, include_cancelled: bool = True) -> bool:
     if not sub_row:
         return False
     # sub_row: (user_id, status, payment_method_id, current_period_end, next_charge_at, amount, currency, created_at, updated_at)
@@ -158,10 +178,7 @@ def is_active(sub_row, include_cancelled: bool = True) -> bool:
     if cpe_dt is None:
         return False
     # если без tzinfo — считаем это UTC
-    if cpe_dt.tzinfo is None:
-        cpe_dt = cpe_dt.replace(tzinfo=timezone.utc)
-    else:
-        cpe_dt = cpe_dt.astimezone(timezone.utc)
+    cpe_dt = cpe_dt.replace(tzinfo=timezone.utc) if cpe_dt.tzinfo is None else cpe_dt.astimezone(timezone.utc)
 
     allowed_statuses = ("active", "cancelled") if include_cancelled else ("active",)
     return status in allowed_statuses and cpe_dt > datetime.now(timezone.utc)
@@ -174,7 +191,7 @@ async def start_or_resume_checkout(
     price_override_cents: int | None = None,
     promo_code: str | None = None,
     promo_title: str | None = None,
-):
+) -> tuple[str, str | None]:
     last_pending_id = await get_last_pending_payment_id(user_id)
     if last_pending_id:
         p = await get_payment(last_pending_id)
@@ -193,7 +210,11 @@ async def start_or_resume_checkout(
                 except Exception:
                     p_price = None
 
-            if p_plan == plan and (desired_price is None or p_price == desired_price) and (promo_code or None) == (p_promo_code or None):
+            if (
+                p_plan == plan
+                and (desired_price is None or p_price == desired_price)
+                and (promo_code or None) == (p_promo_code or None)
+            ):
                 url = _get_confirmation_url(p) or await get_payment_confirmation_url(last_pending_id)
                 if url:
                     return last_pending_id, url
@@ -208,12 +229,16 @@ async def start_or_resume_checkout(
         promo_title=promo_title,
     )
     fallback_amount = price_override_cents if price_override_cents is not None else amount_for(plan)[0]
-    await upsert_payment_status(user_id, payment_id, fallback_amount, "RUB", "pending", raw_text="{}", confirmation_url=url)
+    await upsert_payment_status(
+        user_id, payment_id, fallback_amount, "RUB", "pending", raw_text="{}", confirmation_url=url
+    )
     return payment_id, url
+
 
 # ---------- АВТОСПИСАНИЯ ----------
 
-async def charge_recurring(user_id: int, notifier: Notifier = None):
+
+async def charge_recurring(user_id: int, notifier: Notifier = None) -> str:
     """
     Пытается списать подписку по payment_method_id, если пришло время.
     Возвращает 'succeeded' | 'pending' | 'failed' | 'skipped'.
@@ -250,7 +275,7 @@ async def charge_recurring(user_id: int, notifier: Notifier = None):
 
     if not nca or nca > now:
         return "skipped"
-    
+
     # Не плодим новые pending, если уже есть
     pending = await get_last_pending_payment_id(user_id)
     if pending:
@@ -261,7 +286,6 @@ async def charge_recurring(user_id: int, notifier: Notifier = None):
     # Создаём рекуррентный платёж (передаём email!)
     months = 12 if plan == "year" else 1
     payment = await create_recurring_payment(pmid, user_id, sub_email, plan)
-
 
     amount_int = int(round(float(payment.amount.value) * 100))
     await upsert_payment_status(
@@ -295,7 +319,7 @@ async def charge_recurring(user_id: int, notifier: Notifier = None):
         )
 
         # удаляем прочие "висящие" pending этого пользователя
-        _ = await cancel_other_pendings(user_id, keep_payment_id=payment.id) 
+        _ = await cancel_other_pendings(user_id, keep_payment_id=payment.id)
         if notifier is not None:
             try:
                 await notifier(user_id, "charged_success", {"plan": plan})
@@ -317,31 +341,28 @@ async def charge_recurring(user_id: int, notifier: Notifier = None):
             except Exception:
                 log.exception("failed notify failed for user_id=%s", user_id)
         # попытки исчерпаны: отключаем автопродление
-        await upsert_subscription(
-            user_id,
-            status="cancelled",
-            next_charge_at=None,
-            retry_attempts=retry_attempts
-        )
+        await upsert_subscription(user_id, status="cancelled", next_charge_at=None, retry_attempts=retry_attempts)
         return "failed"
 
     if notifier is not None:
-            try:
-                await notifier(user_id, "charged_failed", {"plan": plan, "attempt": retry_attempts + 1})
-            except Exception:
-                log.exception("failed notify failed for user_id=%s", user_id)
+        try:
+            await notifier(user_id, "charged_failed", {"plan": plan, "attempt": retry_attempts + 1})
+        except Exception:
+            log.exception("failed notify failed for user_id=%s", user_id)
 
     base = nca if isinstance(nca, datetime) else now
     next_try = base + timedelta(days=1)
     await upsert_subscription(user_id, next_charge_at=next_try, retry_attempts=retry_attempts + 1)
     return "failed"
 
-async def charge_due_subscriptions(notifier: Notifier = None):
+
+async def charge_due_subscriptions(notifier: Notifier = None) -> dict[str, int]:
     """
     Находит подписки, которым пора списать, и вызывает charge_recurring по каждой.
     Фильтр: status='active', payment_method_id NOT NULL, next_charge_at <= now.
     """
     from db import list_due_subscriptions
+
     now_dt = datetime.now(timezone.utc)
     due = await list_due_subscriptions(now_dt)
     results = {"succeeded": 0, "pending": 0, "failed": 0, "skipped": 0}
@@ -349,6 +370,7 @@ async def charge_due_subscriptions(notifier: Notifier = None):
         res = await charge_recurring(user_id, notifier=notifier)
         results[res] = results.get(res, 0) + 1
     return results
+
 
 async def send_precharge_notifications(notifier: Notifier = None) -> int:
     """

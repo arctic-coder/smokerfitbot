@@ -1,6 +1,7 @@
 # tools/json_to_sql.py
-import json, hashlib
+import json
 from pathlib import Path
+
 
 def q(s: str) -> str:
     if s is None:

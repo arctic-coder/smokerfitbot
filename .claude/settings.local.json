@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(pip install:*)",
+      "Bash(ruff check:*)",
+      "Bash(ruff format:*)",
+      "Bash(python -m pytest tests/test_autobilling.py tests/test_precharge.py tests/test_recurring_retries.py -v)",
+      "Bash(docker-compose:*)",
+      "Bash(DATABASE_URL=\"postgresql://postgres:postgres@localhost:5432/smokerfit_test?sslmode=disable\" python -m pytest:*)",
+      "Bash(python:*)"
+    ]
+  }
+}

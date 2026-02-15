@@ -1,5 +1,6 @@
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
+
 
 @dataclass(frozen=True)
 class Config:
@@ -21,5 +22,5 @@ class Config:
             port=int(os.getenv("PORT", "8080")),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             autobill_interval_sec=int(os.getenv("AUTOBILL_INTERVAL_SEC", "600")),
-            client_max_size=int(os.getenv("CLIENT_MAX_SIZE", str(256*1024))),
+            client_max_size=int(os.getenv("CLIENT_MAX_SIZE", str(256 * 1024))),
         )

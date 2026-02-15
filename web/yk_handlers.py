@@ -1,10 +1,14 @@
-import logging
 import json
+import logging
+
 from aiohttp import web
+
 from billing.service import check_and_activate
 from db import get_user_id_by_payment_id
 
 log = logging.getLogger(__name__)
+
+
 # currently only succeed webhooks. NEED TO BE CONFIGURED IN YOOKASSA SHOP
 async def yookassa_webhook(request: web.Request) -> web.Response:
     try:
@@ -12,7 +16,7 @@ async def yookassa_webhook(request: web.Request) -> web.Response:
         # todo add validation for JSON
     except Exception:
         return web.Response(status=400, text="bad json")
-    
+
     # log webhook
     try:
         evt = (data or {}).get("event")

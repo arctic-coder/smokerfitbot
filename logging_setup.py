@@ -1,5 +1,6 @@
 import logging
 
+
 def setup_logging(level: str = "INFO") -> None:
     logging.basicConfig(
         level=getattr(logging, level, logging.INFO),
@@ -7,7 +8,7 @@ def setup_logging(level: str = "INFO") -> None:
         datefmt="%H:%M:%S",
         force=True,
     )
-    
+
     logging.getLogger("aiogram").setLevel(logging.WARNING)
     logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
     logging.getLogger("asyncpg").setLevel(logging.INFO)

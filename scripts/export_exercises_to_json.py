@@ -1,7 +1,9 @@
 # scripts/export_exercises_to_json.py
-import os, json, re
-import pandas as pd
+import json
+import re
 from pathlib import Path
+
+import pandas as pd
 
 SHEET_NAME = "excercises"  # название листа в твоём xlsx
 

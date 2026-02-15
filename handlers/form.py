@@ -1,27 +1,63 @@
 # handlers/form.py
-import json
 import ast
-from aiogram import Dispatcher, types
-from aiogram.dispatcher import FSMContext
+import json
+
+from aiogram import F, Router, types
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
 from aiogram.types import ReplyKeyboardRemove
 
-from states import Form
-from utils import generate_workout
-from db import get_user, save_user, get_subscription, set_free_workout_used, has_active_promocodes
-from keyboards import level_kb, limitations_kb, equipment_kb, duration_kb_for, extras_kb, kb_choose_plan, kb_promo_prompt
-from texts import (
-    BTN_35_45, BTN_EQUIP_NONE, BTN_JUNIOR, BTN_LIMIT_NO, BTN_NO_NEED, LEVEL_PROMPT, LIMITATIONS_PROMPT, EQUIPMENT_PROMPT, DURATION_PROMPT, EXTRAS_PROMPT,
-    INVALID_CHOICE, PROFILE_NOT_FOUND, WORKOUT_FOOTER, WORKOUT_STARTING, WORKOUT_EMPTY, WORKOUT_HEADER,
-    BTN_FILL_FORM, BTN_USE_EXISTING_FORM, BTN_DONE, SUB_REQUIRED, PROMO_PROMPT,
-    LEVELS, LIMITATIONS, EQUIPMENT, DURATION, DURATION_BEGINNER, EXTRA_MUSCLE_OPTIONS
-)
 from billing.service import is_active
+from db import get_subscription, get_user, has_active_promocodes, save_user, set_free_workout_used
+from keyboards import (
+    duration_kb_for,
+    equipment_kb,
+    extras_kb,
+    kb_choose_plan,
+    kb_promo_prompt,
+    level_kb,
+    limitations_kb,
+)
+from states import Form
+from texts import (
+    BTN_35_45,
+    BTN_DONE,
+    BTN_EQUIP_NONE,
+    BTN_FILL_FORM,
+    BTN_JUNIOR,
+    BTN_LIMIT_NO,
+    BTN_NO_NEED,
+    BTN_USE_EXISTING_FORM,
+    DURATION,
+    DURATION_BEGINNER,
+    DURATION_PROMPT,
+    EQUIPMENT,
+    EQUIPMENT_PROMPT,
+    EXTRA_MUSCLE_OPTIONS,
+    EXTRAS_PROMPT,
+    INVALID_CHOICE,
+    LEVEL_PROMPT,
+    LEVELS,
+    LIMITATIONS,
+    LIMITATIONS_PROMPT,
+    PROFILE_NOT_FOUND,
+    PROMO_PROMPT,
+    SUB_REQUIRED,
+    WORKOUT_EMPTY,
+    WORKOUT_FOOTER,
+    WORKOUT_HEADER,
+    WORKOUT_STARTING,
+)
+from utils import generate_workout
+
+form_router = Router()
 
 LEVELS_SET = set(LEVELS)
 LIMITATIONS_SET = set(LIMITATIONS)
 EQUIPMENT_SET = set(EQUIPMENT)
 
-def _to_list(v):
+
+def _to_list(v: object) -> list:
     """Нормализует значение в список (JSON-строка, python-repr, одиночная строка…)."""
     if v is None:
         return []
@@ -52,11 +88,15 @@ def _to_list(v):
         return [s]
     return [str(v)]
 
+
+@form_router.message(F.text == BTN_FILL_FORM, StateFilter("*"))
 async def fill_form_new(message: types.Message, state: FSMContext) -> None:
-    await state.finish()
-    await Form.level.set()
+    await state.clear()
+    await state.set_state(Form.level)
     await message.answer(LEVEL_PROMPT, reply_markup=level_kb)
 
+
+@form_router.message(F.text == BTN_USE_EXISTING_FORM, StateFilter("*"))
 async def fill_form_existing(message: types.Message, state: FSMContext) -> None:
     row = await get_user(message.from_user.id)
     if not row:
@@ -68,7 +108,7 @@ async def fill_form_existing(message: types.Message, state: FSMContext) -> None:
     equipment = _to_list(row[3])
 
     await state.update_data(level=level, limitations=limitations, equipment=equipment)
-    await Form.duration.set()
+    await state.set_state(Form.duration)
 
     text = (
         "📋 Ваша анкета:\n"
@@ -79,22 +119,28 @@ async def fill_form_existing(message: types.Message, state: FSMContext) -> None:
     )
     await message.answer(text, reply_markup=duration_kb_for(level))
 
+
+@form_router.message(Form.level)
 async def level_step(message: types.Message, state: FSMContext) -> None:
     if message.text not in LEVELS_SET:
         await message.answer(INVALID_CHOICE, reply_markup=level_kb)
         return
     await state.update_data(level=message.text, limitations=[])
-    await Form.limitations.set()
+    await state.set_state(Form.limitations)
     await message.answer(LIMITATIONS_PROMPT, reply_markup=limitations_kb)
 
+
+@form_router.message(Form.limitations)
 async def limitations_step(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
     current = data.get("limitations", [])
 
     if message.text == BTN_DONE:
         await state.update_data(limitations=current, equipment=[])
-        await Form.equipment.set()
-        await message.answer(EQUIPMENT_PROMPT, parse_mode="HTML", disable_web_page_preview=True, reply_markup=equipment_kb)
+        await state.set_state(Form.equipment)
+        await message.answer(
+            EQUIPMENT_PROMPT, parse_mode="HTML", disable_web_page_preview=True, reply_markup=equipment_kb
+        )
         return
 
     if message.text not in LIMITATIONS_SET:
@@ -112,13 +158,15 @@ async def limitations_step(message: types.Message, state: FSMContext) -> None:
         current.append(message.text)
         await state.update_data(limitations=current)
 
+
+@form_router.message(Form.equipment)
 async def equipment_step(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
     current = data.get("equipment", [])
 
     if message.text == BTN_DONE:
         await state.update_data(equipment=current)
-        await Form.duration.set()
+        await state.set_state(Form.duration)
         level = (await state.get_data()).get("level")
         await message.answer(DURATION_PROMPT, reply_markup=duration_kb_for(level))
         return
@@ -138,6 +186,8 @@ async def equipment_step(message: types.Message, state: FSMContext) -> None:
         current.append(message.text)
         await state.update_data(equipment=current)
 
+
+@form_router.message(Form.duration)
 async def duration_step(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
     level = data.get("level")
@@ -166,7 +216,7 @@ async def duration_step(message: types.Message, state: FSMContext) -> None:
                 promo_price_year_cents=None,
             )
             if await has_active_promocodes():
-                await Form.promo.set()
+                await state.set_state(Form.promo)
                 await message.answer(f"{SUB_REQUIRED}\n\n{PROMO_PROMPT}", reply_markup=kb_promo_prompt())
             else:
                 await message.answer(SUB_REQUIRED, reply_markup=kb_choose_plan())
@@ -174,12 +224,14 @@ async def duration_step(message: types.Message, state: FSMContext) -> None:
 
     if message.text == BTN_35_45:
         await state.update_data(extras=[])
-        await Form.extras.set()
+        await state.set_state(Form.extras)
         await message.answer(EXTRAS_PROMPT, reply_markup=extras_kb())
         return
 
     await _generate_and_send_workout(message, state)
 
+
+@form_router.message(Form.extras)
 async def extras_step(message: types.Message, state: FSMContext) -> None:
     choice = (message.text or "").strip()
     data = await state.get_data()
@@ -187,14 +239,16 @@ async def extras_step(message: types.Message, state: FSMContext) -> None:
 
     if choice == BTN_DONE:
         if len(current) > 2:
-            await message.answer("Можно выбрать не более двух пунктов. Сними лишние и нажми «Готово».", reply_markup=extras_kb())
+            await message.answer(
+                "Можно выбрать не более двух пунктов. Сними лишние и нажми «Готово».", reply_markup=extras_kb()
+            )
             return
         await state.update_data(extras=current)
         await _generate_and_send_workout(message, state)
         return
 
     # валидируем по списку опций
-    if choice not in (EXTRA_MUSCLE_OPTIONS + [BTN_DONE, BTN_NO_NEED]):
+    if choice not in [*EXTRA_MUSCLE_OPTIONS, BTN_DONE, BTN_NO_NEED]:
         await message.answer(INVALID_CHOICE, reply_markup=extras_kb())
         return
 
@@ -204,7 +258,9 @@ async def extras_step(message: types.Message, state: FSMContext) -> None:
         return
 
     if choice in current:
-        await message.answer(f"Уже добавлено: {', '.join(current)}. Нажмите «Готово», когда закончите.", reply_markup=extras_kb())
+        await message.answer(
+            f"Уже добавлено: {', '.join(current)}. Нажмите «Готово», когда закончите.", reply_markup=extras_kb()
+        )
         return
 
     if len(current) >= 2:
@@ -213,7 +269,11 @@ async def extras_step(message: types.Message, state: FSMContext) -> None:
 
     current.append(choice)
     await state.update_data(extras=current)
-    await message.answer(f"Добавлено: {choice}\nВыбрано: {', '.join(current)}\nМожно выбрать ещё {2 - len(current)}.", reply_markup=extras_kb())
+    await message.answer(
+        f"Добавлено: {choice}\nВыбрано: {', '.join(current)}\nМожно выбрать ещё {2 - len(current)}.",
+        reply_markup=extras_kb(),
+    )
+
 
 async def _generate_and_send_workout(message: types.Message, state: FSMContext) -> None:
     user_id = message.from_user.id
@@ -225,7 +285,7 @@ async def _generate_and_send_workout(message: types.Message, state: FSMContext) 
         await message.answer(WORKOUT_EMPTY)
     else:
         lines = [WORKOUT_HEADER]
-        for i, ex in enumerate(workout, start=1):
+        for _i, ex in enumerate(workout, start=1):
             name = ex.get("name") or ex.get("title") or "Упражнение"
             group = f"{ex.get('group')}" if ex.get("group") else ""
             sets_reps = f"{ex.get('sets')} × {ex.get('reps')}" if ex.get("sets") and ex.get("reps") else ""
@@ -238,25 +298,16 @@ async def _generate_and_send_workout(message: types.Message, state: FSMContext) 
 
     # сохраняем анкету
     try:
-        limitations = _to_list(user_data.get('limitations'))
-        equipment   = _to_list(user_data.get('equipment'))
+        limitations = _to_list(user_data.get("limitations"))
+        equipment = _to_list(user_data.get("equipment"))
 
         await save_user(
             user_id=user_id,
-            level=user_data.get('level'),
-            limitations=limitations,         
-            equipment=equipment,            
-            duration_minutes=user_data.get('duration_minutes'),
-            extra_groups=user_data.get('extras')
+            level=user_data.get("level"),
+            limitations=limitations,
+            equipment=equipment,
+            duration_minutes=user_data.get("duration_minutes"),
+            extra_groups=user_data.get("extras"),
         )
     finally:
-        await state.finish()
-
-def register_form_handlers(dp: Dispatcher) -> None:
-    dp.register_message_handler(fill_form_new, lambda m: m.text == BTN_FILL_FORM, state="*")
-    dp.register_message_handler(fill_form_existing, lambda m: m.text == BTN_USE_EXISTING_FORM, state="*")
-    dp.register_message_handler(level_step, state=Form.level)
-    dp.register_message_handler(limitations_step, state=Form.limitations)
-    dp.register_message_handler(equipment_step, state=Form.equipment)
-    dp.register_message_handler(duration_step, state=Form.duration)
-    dp.register_message_handler(extras_step, state=Form.extras)
+        await state.clear()

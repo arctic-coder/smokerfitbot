@@ -1,11 +1,13 @@
 import asyncio
 import logging
-from billing.service import charge_due_subscriptions, send_precharge_notifications
+
+from billing.service import Notifier, charge_due_subscriptions, send_precharge_notifications
 
 log = logging.getLogger(__name__)
 
+
 # recurrent payments, checking subscriptions table if next_charge_at is already in past
-async def autobiller_loop(interval_sec: int, notifier=None) -> None:
+async def autobiller_loop(interval_sec: int, notifier: Notifier = None) -> None:
     while True:
         try:
             pre = await send_precharge_notifications(notifier=notifier)

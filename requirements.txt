@@ -1,5 +1,5 @@
-aiogram==2.25.2
+aiogram==3.15.0
 python-dotenv==1.0.0
-aiosqlite
 asyncpg
 yookassa==3.3.0
+aiohttp
